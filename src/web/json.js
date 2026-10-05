@@ -17,4 +17,3 @@ export function toJson(v, numberText) {
   }
   return { $: "Obj", fields };
 }
-
