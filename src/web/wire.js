@@ -1,6 +1,9 @@
 // Decode the hub's JSON CBOR directly from its byte buffer. Dictionaries
 // and header rules come from core/cbor.bend. This file reads buffers
 // and builds host values; Bend defines the accepted wire grammar.
+/** Build a buffer decoder from Bend dictionaries and header rules.
+ * Results include both JSON forms and sparse text for numbers that cannot round-trip.
+ */
 export function wireDecoder(keys, words, rules, keyText) {
   const text = new TextDecoder("utf-8", { ignoreBOM: true });
   // Actions name host construction operations. Their byte and tag
@@ -18,8 +21,10 @@ export function wireDecoder(keys, words, rules, keyText) {
     }
   }
   if (index !== 768) throw new Error("Incomplete CBOR rule table");
+  /** Decode one complete frame. Invalid frames return null in both JSON forms. */
   return function decode(bytes) {
     let at = 0;
+    /** Reserve bytes, or reject a truncated frame. */
     const take = (n) => {
       if (n > bytes.length - at) throw new Error("Truncated CBOR");
       const start = at;
@@ -27,6 +32,7 @@ export function wireDecoder(keys, words, rules, keyText) {
       return start;
     };
     let itemKind = 0, itemSize = 0;
+    /** Read the header using the shared rule table and tag context. */
     const head = (tag) => {
       const h = bytes[take(1)], plan = plans[(tag << 8) | h], kind = plan & 15, extra = plan >>> 4;
       let n = h & 31;
@@ -40,17 +46,21 @@ export function wireDecoder(keys, words, rules, keyText) {
       itemKind = kind;
       itemSize = n;
     };
+    /** Decode the next UTF-8 text span. */
     const str = (n) => text.decode(bytes.subarray(take(n), at));
+    /** Read a dictionary entry, rejecting an unknown index. */
     const dictionary = (names, n) => {
       const value = names[n];
       if (value === undefined) throw new Error("Invalid CBOR dictionary index");
       return value;
     };
+    /** Resolve a numeric map key through Bend. */
     const numberKey = (raw) => {
       const key = keyText(raw);
       if (key.$ !== "Some") throw new Error("Invalid CBOR key");
       return key.value;
     };
+    /** Read a map key according to the shared grammar. */
     const key = () => {
       head(0);
       const kind = itemKind, n = itemSize;
@@ -61,6 +71,7 @@ export function wireDecoder(keys, words, rules, keyText) {
       if (kind === NUMBER_TEXT) return numberKey(str(n));
       throw new Error("Invalid CBOR key");
     };
+    /** Build both JSON forms and propagate only exceptional number text. */
     const item = (depth = 0) => {
       if (depth > 512) throw new Error("CBOR nesting limit");
       head(0);
@@ -76,27 +87,32 @@ export function wireDecoder(keys, words, rules, keyText) {
       if (kind === ARRAY) {
         if (n > bytes.length - at) throw new Error("Truncated CBOR array");
         const value = [], nodes = [];
+        let numberText;
         for (let i = 0; i < n; i++) {
           const v = item(depth + 1);
           value.push(v.value);
           nodes.push(v.json);
+          if (v.numberText !== undefined) (numberText ??= Object.create(null))[i] = v.numberText;
         }
         let items = { $: "End" };
         for (let i = nodes.length - 1; i >= 0; i--) items = { $: "Item", head: nodes[i], tail: items };
-        return { json: { $: "Arr", items }, value };
+        return { json: { $: "Arr", items }, value, numberText };
       }
       if (kind === OBJECT) {
         if (n > (bytes.length - at) / 2) throw new Error("Truncated CBOR map");
         const value = {}, nodes = [];
+        let numberText;
         for (let i = 0; i < n; i++) {
           const name = key();
           const v = item(depth + 1);
           Object.defineProperty(value, name, { value: v.value, enumerable: true, writable: true, configurable: true });
           nodes.push({ key: name, json: v.json });
+          if (v.numberText !== undefined) (numberText ??= Object.create(null))[name] = v.numberText;
+          else if (numberText) delete numberText[name];
         }
         let fields = { $: "End" };
         for (let i = nodes.length - 1; i >= 0; i--) fields = { $: "Field", key: nodes[i].key, value: nodes[i].json, tail: fields };
-        return { json: { $: "Obj", fields }, value };
+        return { json: { $: "Obj", fields }, value, numberText };
       }
       if (kind === WORD) {
         const value = dictionary(words, n);
@@ -104,7 +120,10 @@ export function wireDecoder(keys, words, rules, keyText) {
       }
       if (kind === NUMBER_TEXT) {
         const raw = str(n);
-        return { json: { $: "Num", raw }, value: Number(raw) };
+        const value = Number(raw);
+        // Keep noncanonical number text beside host data, never inside it.
+        // A marker in the value could collide with a real event object.
+        return { json: { $: "Num", raw }, value, numberText: String(value) === raw ? undefined : raw };
       }
       if (kind === FALSE || kind === TRUE || kind === NULL) {
         const value = kind === NULL ? null : kind === TRUE;

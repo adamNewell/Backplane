@@ -8,6 +8,30 @@ const changes = (items: unknown[]) => ({ t: "changes", items });
 const restore = async (storage: IDBFactory) => new HistoryCache(storage).load();
 
 describe("browser history cache", () => {
+  test("rebuilds a version-1 cache instead of restoring rounded numbers", async () => {
+    const storage = new IDBFactory();
+    const old = await new Promise<IDBDatabase>((resolve) => {
+      const request = storage.open("backplane-history", 1);
+      request.onupgradeneeded = () => {
+        request.result.createObjectStore("meta");
+        request.result.createObjectStore("batches");
+      };
+      request.onsuccess = () => resolve(request.result);
+    });
+    const tx = old.transaction(["meta", "batches"], "readwrite");
+    tx.objectStore("meta").put({ origin: "hub", seq: 1 }, "head");
+    tx.objectStore("batches").put({ since: 0, items: [{ number: 9007199254740992 }] }, 0);
+    await new Promise<void>((resolve) => { tx.oncomplete = () => resolve(); });
+    old.close();
+    const current = new HistoryCache(storage);
+    expect(await current.load()).toBeNull();
+    expect(current.origin).toBeNull();
+    expect(current.seq).toBe(0);
+    current.keep(log([{ number: 42 }]));
+    await current.pending;
+    expect(await restore(storage)).toEqual(log([{ number: 42 }]));
+  });
+
   test("restores a history larger than localStorage and appends only new events", async () => {
     const storage = new IDBFactory();
     const cache = new HistoryCache(storage);

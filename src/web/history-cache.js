@@ -1,6 +1,8 @@
 // The browser's copy of the hub log. Store batches in IndexedDB so an
 // update copies only new events, and never serializes the whole history.
+/** Persist a complete hub-history prefix without blocking the live connection. */
 export class HistoryCache {
+  /** Open the database with a bounded wait. Storage can be replaced by a test factory. */
   constructor(storage = globalThis.indexedDB, timeoutMs = 3000) {
     this.timeoutMs = timeoutMs;
     this.origin = null;
@@ -9,6 +11,7 @@ export class HistoryCache {
     this.db = new Promise((resolve) => {
       if (!storage) { resolve(null); return; }
       let settled = false;
+      /** Settle opening once and close a late connection. */
       const finish = (db) => {
         if (settled) { db?.close(); return; }
         settled = true;
@@ -18,10 +21,17 @@ export class HistoryCache {
       // A blocked or stalled database must not prevent a live connection.
       const timer = setTimeout(() => finish(null), this.timeoutMs);
       try {
-        const request = storage.open("backplane-history", 1);
-        request.onupgradeneeded = () => {
-          request.result.createObjectStore("meta");
-          request.result.createObjectStore("batches");
+        const request = storage.open("backplane-history", 2);
+        request.onupgradeneeded = (event) => {
+          if (event.oldVersion === 0) {
+            request.result.createObjectStore("meta");
+            request.result.createObjectStore("batches");
+          } else {
+            // Version 1 could round number text. Rebuild this local copy
+            // from the hub rather than adopt an already lossy prefix.
+            request.transaction.objectStore("meta").clear();
+            request.transaction.objectStore("batches").clear();
+          }
         };
         request.onsuccess = () => {
           const db = request.result;
@@ -35,8 +45,10 @@ export class HistoryCache {
 
   // Abort a stalled transaction and settle once. Late callbacks must not
   // adopt a history after the live connection has started without it.
+  /** Settle a transaction once; abort it if its deadline expires. */
   deadline(tx, resolve, fallback) {
     let settled = false;
+    /** Ignore completion callbacks after the transaction has settled. */
     const finish = (value) => {
       if (settled) return;
       settled = true;
@@ -51,6 +63,7 @@ export class HistoryCache {
     return finish;
   }
 
+  /** Load a validated prefix and its sparse exact-number text, or return null. */
   async load() {
     const db = await this.db;
     if (!db) return null;
@@ -67,20 +80,30 @@ export class HistoryCache {
           const head = meta.result;
           if (!head || typeof head.origin !== "string") { finish(null); return; }
           const items = [];
+          let numberText;
           for (const batch of batches.result) {
             if (batch.since !== items.length || !Array.isArray(batch.items)) { finish(null); return; }
+            if (batch.numberText) {
+              numberText ??= { items: Object.create(null) };
+              for (const index of Object.keys(batch.numberText)) {
+                numberText.items[items.length + Number(index)] = batch.numberText[index];
+              }
+            }
             for (const item of batch.items) items.push(item);
           }
           if (items.length !== head.seq) { finish(null); return; }
           this.origin = head.origin;
           this.seq = head.seq;
-          finish({ t: "log", since: 0, origin: head.origin, items });
+          const log = { t: "log", since: 0, origin: head.origin, items };
+          if (numberText) log.numberText = numberText;
+          finish(log);
         };
       } catch { if (finish) finish(null); else resolve(null); }
     });
   }
 
-  keep(msg) {
+  /** Queue a contiguous event batch. Exact-number text stays separate from event data. */
+  keep(msg, numberText) {
     if (!Array.isArray(msg?.items)) return;
     let reset = false;
     let since = this.seq;
@@ -98,10 +121,11 @@ export class HistoryCache {
     this.seq = seq;
     // Serialize transactions, not histories. An aborted write leaves a
     // valid shorter prefix; the hub supplies the missing events on reload.
-    this.pending = this.pending.then(() => this.write(origin, since, seq, items, reset)).catch(() => {});
+    this.pending = this.pending.then(() => this.write(origin, since, seq, items, reset, numberText?.items)).catch(() => {});
   }
 
-  async write(origin, since, seq, items, reset) {
+  /** Atomically append chunks and number text after checking the stored prefix. */
+  async write(origin, since, seq, items, reset, numberText) {
     const db = await this.db;
     if (!db) return;
     return new Promise((resolve) => {
@@ -120,7 +144,13 @@ export class HistoryCache {
           if (!reset && (head.result?.origin !== origin || head.result?.seq !== since)) return;
           if (reset) batches.clear();
           for (let i = 0; i < items.length; i += 256) {
-            batches.put({ since: since + i, items: items.slice(i, i + 256) }, since + i);
+            const batch = { since: since + i, items: items.slice(i, i + 256) };
+            if (numberText) {
+              for (let j = i; j < Math.min(i + 256, items.length); j++) {
+                if (numberText[j] !== undefined) (batch.numberText ??= Object.create(null))[j - i] = numberText[j];
+              }
+            }
+            batches.put(batch, since + i);
           }
           meta.put({ origin, seq }, "head");
         };

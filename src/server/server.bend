@@ -77,6 +77,7 @@ type Msg is Data:
   Rpc{client: U32, text: String}
   AgentLine{thread: String, line: String}
   AgentGone{thread: String, code: U32, pid: U32}
+  AgentWriteFailed{thread: String, pid: U32, code: U32, reason: String}
   Tick{}
   Push{client: U32, text: String}
   # a message for one client, already CBOR
@@ -371,25 +372,34 @@ def Agent.reader(fuel: Nat, s: Socket, carry: U.Lines, +pid: U32, +thread: Strin
       IO.bind(Socket & Result<&1, &1, U32 & String, List<&2, U32>>, Unit, H.Sock.recv_bytes(s, 65536),
         r => Agent.got(r, carry, pid, thread, inbox, s2 => c2 => Agent.reader(f, s2, c2, pid, thread, inbox)))
 
-def Agent.wrote(r: Socket & Result<&1, &1, U32 & String, Unit>, k: Socket -> IO(Unit)) -> IO(Unit):
-  (s, _) = r
-  k(s)
+def Agent.wrote(r: Socket & Result<&1, &1, U32 & String, Unit>, +input: Chan(String), +pid: U32, +thread: String, +inbox: Chan(Msg), k: Socket -> IO(Unit)) -> IO(Unit):
+  (s, res) = r
+  match res:
+    case Done{_}:
+      k(s)
+    case Fail{(code, reason)}:
+      do IO<Unit>:
+        Chan.close(String, input)
+        # Queue failure before abort wakes the reader's exit notification.
+        ok : Bool <- Chan.send(Msg, inbox, AgentWriteFailed{thread, pid, code, reason})
+        s2 : Socket <- H.Sock.abort(s)
+        Socket.close(s2)
 
-def Agent.write(m: Maybe<&1, String>, s: Socket, k: Socket -> IO(Unit)) -> IO(Unit):
+def Agent.write(m: Maybe<&1, String>, s: Socket, +input: Chan(String), +pid: U32, +thread: String, +inbox: Chan(Msg), k: Socket -> IO(Unit)) -> IO(Unit):
   match m:
     case Some{line}:
-      IO.bind(Socket & Result<&1, &1, U32 & String, Unit>, Unit, H.Sock.send_text(s, line ++ "\n"), r => Agent.wrote(r, k))
+      IO.bind(Socket & Result<&1, &1, U32 & String, Unit>, Unit, H.Sock.send_text(s, line ++ "\n"), r => Agent.wrote(r, input, pid, thread, inbox, k))
     case None{}:
       Socket.close(s)
 
 # lines from the hub go to the agent's stdin until the channel closes
-def Agent.writer(fuel: Nat, s: Socket, +input: Chan(String)) -> IO(Unit):
+def Agent.writer(fuel: Nat, s: Socket, +input: Chan(String), +pid: U32, +thread: String, +inbox: Chan(Msg)) -> IO(Unit):
   match fuel:
     case 0n:
       Socket.close(s)
     case 1n+f:
       IO.bind(Maybe<&1, String>, Unit, Chan.recv(String, input),
-        m => Agent.write(m, s, s2 => Agent.writer(f, s2, input)))
+        m => Agent.write(m, s, input, pid, thread, inbox, s2 => Agent.writer(f, s2, input, pid, thread, inbox)))
 
 # Connections
 # -----------
@@ -754,7 +764,7 @@ def Hub.spawned.dup(r: Socket & Result<&1, &1, U32 & String, Socket>, +pid: U32,
     case Done{wr} Hub{st, f, ls, cl, as, +inbox, cfg, note}:
       do IO<Hub>:
         +input : Chan(String) <- Chan.new(String, 256)
-        IO.spawn(Unit, Agent.writer(Fuel.forever(), wr, input))
+        IO.spawn(Unit, Agent.writer(Fuel.forever(), wr, input, pid, thread, inbox))
         IO.spawn(Unit, Agent.reader(Fuel.forever(), rd, U.Lines.new(), pid, thread, inbox))
         return Hub{st, f, ls, cl, Agent{thread, input, pid, key} <> as, inbox, cfg, note}
     case Fail{_} _:
@@ -1781,7 +1791,7 @@ def Grok.duped(r: Socket & Result<&1, &1, U32 & String, Socket>, +pid: U32, +t: 
     case Done{wr}:
       do IO<Unit>:
         +input : Chan(String) <- Chan.new(String, 64)
-        IO.spawn(Unit, Agent.writer(Fuel.forever(), wr, input))
+        IO.spawn(Unit, Agent.writer(Fuel.forever(), wr, input, pid, thread, inbox))
         ok : Bool <- Chan.send(Msg, inbox, TurnPid{thread, pid, input})
         ok2 : Bool <- Chan.send(String, input, AC.Acp.init())
         Grok.reader(Fuel.forever(), rd, U.Lines.new(), AC.Acp.new(), t, pid, B.Tag.of(thread, pid), input, inbox)
@@ -4739,6 +4749,24 @@ def Hub.gone(h: Hub, +thread: String, +code: U32, +pid: U32, +now: Nat) -> IO(Hu
     case Hub{st, f, ls, cl, +as, inbox, cfg, note}:
       Hub.gone.k(Agent.pid_is(Agents.get(as, thread), pid), Hub{st, f, ls, cl, as, inbox, cfg, note}, thread, code, now)
 
+# Only the failed process can end this thread. An old writer cannot stop
+# a replacement agent. The reader remains responsible for reaping it.
+def Hub.write_failed.k(current: Bool, h: Hub, +thread: String, +code: U32, +reason: String, +now: Nat) -> IO(Hub):
+  match current h:
+    case True{} Hub{st, f, ls, cl, +as, inbox, cfg, note}:
+      do IO<Hub>:
+        Hub.agent_stop(Agents.get(as, thread))
+        Hub.step(Hub{st, f, ls, cl, Agents.drop(as, thread), inbox, cfg, note},
+          B.Step{[M.ActivityLogged{thread, B.Hub.id("write", now, 0n), "error", "write", "agent command delivery failed (" ++ U32.show(code) ++ "): " ++ reason, now},
+            M.TurnChanged{thread, M.Failed{}, now}], Nil{}})
+    case False{} _:
+      IO.pure(Hub, h)
+
+def Hub.write_failed(h: Hub, +thread: String, +pid: U32, +code: U32, +reason: String, +now: Nat) -> IO(Hub):
+  match h:
+    case Hub{st, f, ls, cl, +as, inbox, cfg, note}:
+      Hub.write_failed.k(Agent.pid_is(Agents.get(as, thread), pid), Hub{st, f, ls, cl, as, inbox, cfg, note}, thread, code, reason, now)
+
 # each minute the hub's size goes into the gauges
 def Hub.tick(h: Hub, +now: Nat) -> IO(Hub):
   match h:
@@ -5850,6 +5878,8 @@ def Msg.kind(m: Msg) -> String:
       "agent_line"
     case AgentGone{_, _, _}:
       "agent_gone"
+    case AgentWriteFailed{_, _, _, _}:
+      "agent_write_failed"
     case Tick{}:
       "tick"
     case Push{_, _}:
@@ -5931,6 +5961,8 @@ def Hub.handle(h: Hub, m: Msg, +now: Nat) -> IO(Hub):
       Hub.recover(h, now)
     case AgentGone{thread, code, pid}:
       Hub.gone(h, thread, code, pid, now)
+    case AgentWriteFailed{thread, pid, code, reason}:
+      Hub.write_failed(h, thread, pid, code, reason, now)
     case Tick{}:
       Hub.tick(h, now)
     case Push{client, text}:

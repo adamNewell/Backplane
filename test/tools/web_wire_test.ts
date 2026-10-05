@@ -2,6 +2,9 @@
 import { expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { wireDecoder } from "../../src/web/wire.js";
+import { toJson } from "../../src/web/json.js";
+import { HistoryCache } from "../../src/web/history-cache.js";
+import { IDBFactory } from "fake-indexeddb";
 
 const entry = readFileSync("build/web-wire-test/wire.html", "utf8").match(/src="\.\/([^"]+\.js)"/)![1];
 new Function(readFileSync(`build/web-wire-test/${entry}`, "utf8"))();
@@ -38,6 +41,31 @@ test("number text stays exact in Bend and object keys cannot alter prototypes", 
   expect(W.show(result.json)).toBe(W.show(W.decode(bendList(bytes))));
   expect(Object.hasOwn(result.value, "__proto__")).toBe(true);
   expect(({} as any).polluted).toBeUndefined();
+  expect(W.show(toJson(result.value, result.numberText))).toBe(W.show(result.json));
+});
+
+test("cache restoration preserves exact number text across batches and deltas without marker collisions", async () => {
+  const storage = new IDBFactory();
+  const cache = new HistoryCache(storage);
+  const rows = Array.from({ length: 258 }, (_, i) => i === 0 || i === 256
+    ? '{"large":9007199254740993,"decimal":1.2300,"nested":[-0,1e100],"literal":{"$num":"1.2300"},"__proto__":{"value":2.000}}'
+    : '{"ordinary":42}');
+  const read = (text: string) => decode(Uint8Array.from(list(W.encode(text))));
+  const initial = read('{"t":"log","origin":"hub","since":0,"items":[' + rows.join(',') + ']}');
+  cache.keep(initial.value, initial.numberText);
+  await cache.pending;
+  const delta = read('{"t":"changes","items":[{"decimal":3.1400}]}');
+  cache.keep(delta.value, delta.numberText);
+  await cache.pending;
+  const saved = await new HistoryCache(storage).load();
+  const expected = read('[' + rows.join(',') + ',{"decimal":3.1400}]');
+  expect(W.show(toJson(saved!.items, saved!.numberText?.items))).toBe(W.show(expected.json));
+  expect(saved!.items[0].literal).toEqual({ $num: "1.2300" });
+  expect(Object.hasOwn(saved!.items[0], "__proto__")).toBe(true);
+  expect(({} as any).value).toBeUndefined();
+  cache.keep({ t: "log", origin: "other", since: 0, items: [{ ordinary: 42 }] });
+  await cache.pending;
+  expect(await new HistoryCache(storage).load()).toEqual({ t: "log", origin: "other", since: 0, items: [{ ordinary: 42 }] });
 });
 
 test("truncated and unsupported messages match the Bend codec", () => {

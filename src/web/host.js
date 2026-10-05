@@ -10,27 +10,10 @@ import * as Solid from "./solid.js";
 import * as Plot2d from "./plot2d.js";
 import { HistoryCache } from "./history-cache.js";
 import { wireDecoder } from "./wire.js";
+import { toJson } from "./json.js";
 
 // JSON <-> Bend Json
 // ------------------
-
-function toJson(v) {
-  if (v === null || v === undefined) return { $: "Null" };
-  if (typeof v === "boolean") return { $: "Flag", value: v };
-  if (typeof v === "number") return { $: "Num", raw: String(v) };
-  if (typeof v === "string") return { $: "Str", text: v };
-  if (Array.isArray(v)) {
-    let items = { $: "End" };
-    for (let i = v.length - 1; i >= 0; i -= 1) items = { $: "Item", head: toJson(v[i]), tail: items };
-    return { $: "Arr", items };
-  }
-  let fields = { $: "End" };
-  const keys = Object.keys(v);
-  for (let i = keys.length - 1; i >= 0; i -= 1) {
-    fields = { $: "Field", key: keys[i], value: toJson(v[keys[i]]), tail: fields };
-  }
-  return { $: "Obj", fields };
-}
 
 // Bend List<U32> -> bytes
 function fromList(xs) {
@@ -749,8 +732,8 @@ function connect() {
       else if (o) Plot2d.got(o, at);
       return;
     }
-    const { json: j, value } = decodeWire(bytes);
-    historyCache.keep(value);
+    const { json: j, value, numberText } = decodeWire(bytes);
+    historyCache.keep(value, numberText);
     const r = App.recv(ui, j);
     ui = r.ui;
     run(r.cmds);
@@ -777,7 +760,10 @@ setInterval(() => {
 // A denied or unavailable database starts from the authoritative hub.
 render();
 historyCache.load().then((cache) => {
-  if (cache) ui = App.recv(ui, toJson(cache)).ui;
+  if (cache) {
+    const { numberText, ...log } = cache;
+    ui = App.recv(ui, toJson(log, numberText)).ui;
+  }
   later();
   connect();
 });
