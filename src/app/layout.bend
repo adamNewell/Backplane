@@ -3109,7 +3109,7 @@ def Hb.tick(+ty: Ty, +id: String, +i: U32, +n: U32, +at: U32, +xa: U32, +sw: U32
       Bool.pick(U32, cur, T.Th.accent(), T.Th.dim()), 255)],
     [Lay.hit((x - U32.shr(cw) : U32), (y - 8 : U32), cw, 20, "hist-go", id)]}
 
-def Hb.ticks(ss: List<&2, HS.Step>, +ty: Ty, +i: U32, +n: U32, +at: U32, +xa: U32, +sw: U32, +y: U32) -> Out:
+def Hb.ticks(ss: List<&2, M.DesignRecord>, +ty: Ty, +i: U32, +n: U32, +at: U32, +xa: U32, +sw: U32, +y: U32) -> Out:
   match ss:
     case Nil{}:
       Hb.tick(ty, "", i, n, at, xa, sw, y)
@@ -3117,7 +3117,7 @@ def Hb.ticks(ss: List<&2, HS.Step>, +ty: Ty, +i: U32, +n: U32, +at: U32, +xa: U3
       Out.cat(Hb.tick(ty, HS.Step.id(s), i, n, at, xa, sw, y), Hb.ticks(t, ty, (i + 1 : U32), n, at, xa, sw, y))
 
 # the scrubber's positions run 0 (the first step) to n (live)
-def Hb.scrub(+ty: Ty, +ss: List<&2, HS.Step>, +n: Nat, +at: Nat, +x0: U32, +x1: U32, +y: U32) -> Out:
+def Hb.scrub(+ty: Ty, +ss: List<&2, M.DesignRecord>, +n: Nat, +at: Nat, +x0: U32, +x1: U32, +y: U32) -> Out:
   +sw = {(x1 - x0 - 32 : U32) : U32}
   Out.cat(Out.ops([D.Draw.rect(D.Clip.all(), (x0 + 16 : U32), (y + 1 : U32), sw, 2, T.Th.line(), 255)]),
     Hb.ticks(ss, ty, 0, U32.from_nat(n), Bool.pick(U32, Nat.is_eq(at, 0n), U32.from_nat(n), (U32.from_nat(at) - 1 : U32)), (x0 + 16 : U32), sw, y))

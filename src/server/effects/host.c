@@ -61,18 +61,23 @@ static __attribute__((unused)) ssize_t host_write(int fd, const void* p, size_t 
   return r;
 }
 
-// Sends what is left of w->data; a full socket parks until writable.
+// Sends have one absolute deadline. Partial progress cannot extend it.
 static __attribute__((unused)) Term host_send_more(Env e, IoWork* w) {
   int fd = (int)w->hand;
+  u64 deadline = *(u64*)w->text;
   while (w->code == 0 && (u64)w->made < w->size) {
+    if (io_tick() >= deadline) { w->code = ETIMEDOUT; break; }
     ssize_t n = host_write(fd, w->data + w->made, w->size - (u64)w->made);
-    if (n < 0 && errno == EAGAIN) {
-      return io_wait_on(w, fd, POLLOUT, 0, host_send_more);
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      return io_wait_on(w, fd, POLLOUT, deadline, host_send_more);
     }
+    if (n == 0) { w->code = EPIPE; break; }
+    if (n < 0 && errno == EINTR) continue;
     w->made += io_sys_end(w, n);
   }
   Term r = w->code != 0 ? io_fail(e, w->code, NULL) : io_done(e, host_unit());
   free(w->data);
+  free(w->text);
   return io_tup(e, io_hand(w->hand), r);
 }
 
@@ -207,6 +212,8 @@ Term sock_send_bytes_run(Env e, Term* f, IoWork* w) {
     free(w->data);
     return io_tup(e, io_hand(w->hand), io_fail(e, w->code, NULL));
   }
+  w->text = io_mem(malloc(sizeof(u64)));
+  *(u64*)w->text = io_tick() + 30000000000ull;
   return host_send_more(e, w);
 }
 
@@ -224,6 +231,8 @@ Term sock_send_text_run(Env e, Term* f, IoWork* w) {
   w->data = io_cstr(e, f[1], &w->size);
   w->made = 0;
   w->code = 0;
+  w->text = io_mem(malloc(sizeof(u64)));
+  *(u64*)w->text = io_tick() + 30000000000ull;
   return host_send_more(e, w);
 }
 
@@ -708,4 +717,14 @@ static void __attribute__((constructor)) sys_exec_use(void) {
   io_eff(CID_SYS_EXEC, sys_exec_run, 0);
 }
 
+#endif
+
+#ifdef CID_SOCK_ABORT
+Term sock_abort_run(Env e, Term* f, IoWork* w) {
+  shutdown((int)io_hand_v(f[0]), SHUT_RDWR);
+  return f[0];
+}
+static void __attribute__((constructor)) sock_abort_use(void) {
+  io_eff(CID_SOCK_ABORT, sock_abort_run, 0);
+}
 #endif

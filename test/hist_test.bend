@@ -7,6 +7,7 @@ import ../src/core/look.bend as LO
 import ../src/core/fold.bend as F
 import ../src/core/client.bend as U
 import ../src/core/json.bend as J
+import ../src/core/far.bend as FR
 
 def item(+k: String, +sig: U32, +layer: U32) -> B.Item:
   B.Item{k, sig, layer, B.PSeg{B.Pt{0.0, 0.0}, B.Pt{1.0, 1.0}, 0.2}, k}
@@ -62,7 +63,15 @@ def Rep.changes(xs: List<&2, M.Entry>) -> List<&2, M.Change>:
 def state() -> M.State:
   M.State.replay(Rep.changes(es()), M.State.empty())
 
-def Show.ids(ss: List<&2, H.Step>) -> String:
+def remote_records() -> M.State:
+  M.State.replay([
+    M.ActivityLogged{"peer~t", "remote-step", "step", "kicad", H.Hist.record(out1(), ""), 1n},
+    M.ActivityLogged{"t", "local-step", "step", "kicad", H.Hist.record(out2(), ""), 2n},
+    M.ActivityLogged{"t", "bad-step", "step", "kicad", "{broken", 3n},
+    M.ActivityLogged{"t", "ordinary", "tool", "kicad", H.Hist.record(out3(), ""), 4n}
+  ], M.State.empty())
+
+def Show.ids(ss: List<&2, M.DesignRecord>) -> String:
   match ss:
     case Nil{}:
       ""
@@ -72,8 +81,8 @@ def Show.ids(ss: List<&2, H.Step>) -> String:
 def newest() -> List<&2, M.Entry>:
   List.reverse(&2, M.Entry, es())
 
-def nth(+i: Nat) -> H.Step:
-  Maybe.default(&2, H.Step, H.Hist.nth(H.Hist.steps(state(), "t"), i), H.Step{"", "", "", "", "", "", Nil{}, 0n})
+def nth(+i: Nat) -> M.DesignRecord:
+  Maybe.default(&2, M.DesignRecord, H.Hist.nth(H.Hist.steps(state(), "t"), i), M.DesignRecord{"", "", "", "", "", "", Nil{}, 0n})
 
 def ui(a: U.Act) -> U.Ui:
   match a:
@@ -126,6 +135,14 @@ def main() -> IO(Unit):
   +live = act(second, "hist-live", "")
   +cmp = act(act(u, "cmp", ""), "cmp-pick", "a\tc1\tStep 1\t/r/.git\t/r")
   do IO<Unit>:
+    C.Check.str("projected history matches entry parsing", Show.ids(H.Hist.steps(state(), "t")), Show.ids(H.Step.all(M.State.steps(state(), "t"), Nil{})))
+    C.Check.str("projected board track matches file filtering", Show.ids(List.reverse(&2, M.DesignRecord, M.State.design(state(), M.DesignRecord.kind_key("t", 0n)))), Show.ids(H.Hist.track(H.Hist.steps(state(), "t"), 0n)))
+    C.Check.str("projected schematic track matches file filtering", Show.ids(List.reverse(&2, M.DesignRecord, M.State.design(state(), M.DesignRecord.kind_key("t", 1n)))), Show.ids(H.Hist.track(H.Hist.steps(state(), "t"), 1n)))
+    C.Check.str("other viewer has no design track", Show.ids(M.State.design(state(), M.DesignRecord.kind_key("t", 2n))), "")
+    C.Check.str("history ignores malformed and ordinary records", Show.ids(H.Hist.steps(remote_records(), "t")), "local-step ")
+    C.Check.str("remote history is isolated", Show.ids(H.Hist.steps(remote_records(), "peer~t")), "remote-step ")
+    C.Check.str("remote reset removes history records", Show.ids(H.Hist.steps(FR.Fr.forget(remote_records(), "peer"), "peer~t")), "")
+    C.Check.str("remote reset keeps local history records", Show.ids(H.Hist.steps(FR.Fr.forget(remote_records(), "peer"), "t")), "local-step ")
     C.Check.str("bar live", bar(u), "True|3|0|Live · 3 steps||||FalseFalseFalse||Working copy|")
     C.Check.str("back from live: the last step", path(back), "git\t/r/.git\tc4\t2\t/r/b.kicad_pcb")
     C.Check.str("bar at the last", bar(back), "True|3|3|Step 3 of 3|m2|Done.|Done.|FalseFalseFalse|||")

@@ -348,7 +348,11 @@ export function mount(canvas) {
     view.asked = performance.now();
     if (models.has(key)) view.show(models.get(key));
     else { view.ticking(true); view.later(); }
-  } else {
+  } else if (canvas.width !== Math.max(1, Math.round(canvas.clientWidth * (window.devicePixelRatio || 1))) ||
+             canvas.height !== Math.max(1, Math.round(canvas.clientHeight * (window.devicePixelRatio || 1)))) {
     view.later();
   }
 }
+
+// Browser resizing changes the canvas size without a page-state update.
+window.addEventListener("resize", () => { if (view) view.later(); });

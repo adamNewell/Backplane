@@ -6317,3 +6317,12 @@ def Laws.keys_names_of_lines():
 
 def Laws.keys_prompt_none():
   {==}
+
+def Laws.entry_count_own():
+  {==}
+
+def Laws.entry_count_receiver():
+  {==}
+
+def Laws.hist_client_deferred():
+  {==}

@@ -1,5 +1,6 @@
 import Base
 import ./bot.bend as BT
+import ./json.bend as J
 
 # The product's state, event-sourced. Every change is a Change appended to
 # the log; the read model is `replay(log)`. Events are persisted forever:
@@ -735,20 +736,41 @@ def Link.bare(s: String) -> String:
 def Idx.links() -> String:
   "@links"
 
-def Idx.get.k(r: Map<&2, List<&2, Entry>> & List<&2, Entry>) -> List<&2, Entry>:
-  (_, v) = r
-  v
+# Ownership count shares the entry index lookup. Sender and auxiliary
+# indexes keep their rows but do not increase the ownership count.
+type EntryLog is Data:
+  EntryLog{items: List<&2, Entry>, owned: Nat}
 
-# what is filed under k, newest first
-def Idx.get(ix: Map<&2, List<&2, Entry>>, +k: String) -> List<&2, Entry>:
-  Idx.get.k(Map.get(List<&2, Entry>, Nil{}, ix, k))
+def Idx.get.k(r: Map<&2, EntryLog> & EntryLog) -> List<&2, Entry>:
+  (_, EntryLog{items, _}) = r
+  items
 
-def Idx.put.k(r: Map<&2, List<&2, Entry>> & List<&2, Entry>, +k: String, e: Entry) -> Map<&2, List<&2, Entry>>:
-  (m, cur) = r
-  Map.set(&2, List<&2, Entry>, m, k, e <> cur)
+def Idx.get(ix: Map<&2, EntryLog>, +k: String) -> List<&2, Entry>:
+  Idx.get.k(Map.get(EntryLog, EntryLog{Nil{}, 0n}, ix, k))
 
-def Idx.put(ix: Map<&2, List<&2, Entry>>, +k: String, e: Entry) -> Map<&2, List<&2, Entry>>:
-  Idx.put.k(Map.get(List<&2, Entry>, Nil{}, ix, k), k, e)
+def EntryLog.count(owned: Bool, n: Nat) -> Nat:
+  match owned:
+    case True{}:
+      1n+n
+    case False{}:
+      n
+
+def Idx.put.k(r: Map<&2, EntryLog> & EntryLog, +k: String, e: Entry, owned: Bool) -> Map<&2, EntryLog>:
+  (m, EntryLog{cur, n}) = r
+  Map.set(&2, EntryLog, m, k, EntryLog{e <> cur, EntryLog.count(owned, n)})
+
+def Idx.put(ix: Map<&2, EntryLog>, +k: String, e: Entry) -> Map<&2, EntryLog>:
+  Idx.put.k(Map.get(EntryLog, EntryLog{Nil{}, 0n}, ix, k), k, e, False{})
+
+def Idx.own(ix: Map<&2, EntryLog>, +k: String, e: Entry) -> Map<&2, EntryLog>:
+  Idx.put.k(Map.get(EntryLog, EntryLog{Nil{}, 0n}, ix, k), k, e, True{})
+
+def Idx.count.k(r: Map<&2, EntryLog> & EntryLog) -> Nat:
+  (_, EntryLog{_, n}) = r
+  n
+
+def Idx.count(ix: Map<&2, EntryLog>, th: String) -> Nat:
+  Idx.count.k(Map.get(EntryLog, EntryLog{Nil{}, 0n}, ix, th))
 
 def Idx.thread(e: Entry) -> String:
   match e:
@@ -771,14 +793,14 @@ def Idx.is_msg(e: Entry) -> Bool:
     case Act{_, _, _, _, _, _}:
       False{}
 
-def Idx.link(msg: Bool, ix: Map<&2, List<&2, Entry>>, +e: Entry) -> Map<&2, List<&2, Entry>>:
+def Idx.link(msg: Bool, ix: Map<&2, EntryLog>, +e: Entry) -> Map<&2, EntryLog>:
   match msg:
     case True{}:
       Idx.put(ix, Idx.links(), e)
     case False{}:
       ix
 
-def Idx.sent(sent: Bool, ix: Map<&2, List<&2, Entry>>, +from: String, +e: Entry) -> Map<&2, List<&2, Entry>>:
+def Idx.sent(sent: Bool, ix: Map<&2, EntryLog>, +from: String, +e: Entry) -> Map<&2, EntryLog>:
   match sent:
     case True{}:
       Idx.link(Idx.is_msg(e), Idx.put(ix, from, e), e)
@@ -787,8 +809,8 @@ def Idx.sent(sent: Bool, ix: Map<&2, List<&2, Entry>>, +from: String, +e: Entry)
 
 # an entry filed under its thread, and one another thread sent under the
 # sender too (and a message under the links)
-def Idx.post.k(ix: Map<&2, List<&2, Entry>>, +th: String, +from: String, +e: Entry) -> Map<&2, List<&2, Entry>>:
-  Idx.sent(Bool.and(Bool.not(String.is_empty(from)), Bool.not(String.eq(from, th))), Idx.put(ix, th, e), from, e)
+def Idx.post.k(ix: Map<&2, EntryLog>, +th: String, +from: String, +e: Entry) -> Map<&2, EntryLog>:
+  Idx.sent(Bool.and(Bool.not(String.is_empty(from)), Bool.not(String.eq(from, th))), Idx.own(ix, th, e), from, e)
 
 # a design step (an Act of tone "step", core/hist.bend) is filed under
 # "@steps:<thread>" as well, so the viewer's history reads a thread's
@@ -803,14 +825,14 @@ def Idx.is_step(e: Entry) -> Bool:
     case Act{_, _, +tone, _, _, _}:
       String.eq(tone, "step")
 
-def Idx.step(step: Bool, ix: Map<&2, List<&2, Entry>>, +e: Entry) -> Map<&2, List<&2, Entry>>:
+def Idx.step(step: Bool, ix: Map<&2, EntryLog>, +e: Entry) -> Map<&2, EntryLog>:
   match step:
     case True{}:
       Idx.put(ix, Idx.steps.key(Idx.thread(e)), e)
     case False{}:
       ix
 
-def Idx.post(ix: Map<&2, List<&2, Entry>>, +e: Entry) -> Map<&2, List<&2, Entry>>:
+def Idx.post(ix: Map<&2, EntryLog>, +e: Entry) -> Map<&2, EntryLog>:
   Idx.step(Idx.is_step(e), Idx.post.k(ix, Idx.thread(e), Link.from(Idx.id(e)), e), e)
 
 # Projection
@@ -822,31 +844,164 @@ type QItem is Data:
 
 # what the read model keeps behind its last field: the bots' world, and
 # the entries filed by thread (Idx)
+# A file a design step touched: A added, M modified, D deleted.
+type DesignFile is Data:
+  DesignFile{st: String, rel: String}
+
+# id is the Act's id; entry is the preceding tool call or message.
+# prev is the preceding commit, empty at the first step.
+type DesignRecord is Data:
+  DesignRecord{id: String, entry: String, commit: String, prev: String, git: String, top: String, files: List<&2, DesignFile>, at: Nat}
+
+def DesignFile.field(xs: List<&2, String>, +i: Nat) -> String:
+  Maybe.default(&2, String, List.head(&2, String, List.drop(&2, String, xs, i)), "")
+
+def DesignFile.of(+text: String) -> DesignFile:
+  match text:
+    case SCon{st, SCon{'\t', rel}}:
+      DesignFile{SCon{st, SNil{}}, rel}
+    case _:
+      +parts = String.split(text, '\t')
+      DesignFile{DesignFile.field(parts, 0n), DesignFile.field(parts, 1n)}
+
+def DesignFile.strs(xs: List<&2, J.Json>) -> List<&2, DesignFile>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case J.Str{text} <> t:
+      DesignFile.of(text) <> DesignFile.strs(t)
+    case _ <> t:
+      DesignFile.strs(t)
+
+def DesignRecord.read(+id: String, +at: Nat, +o: J.Json) -> DesignRecord:
+  DesignRecord{id, J.Json.get_str(o, "e", ""), J.Json.get_str(o, "c", ""), J.Json.get_str(o, "p", ""), J.Json.get_str(o, "g", ""), J.Json.get_str(o, "t", ""),
+    DesignFile.strs(J.Json.elems(J.Json.get_obj(o, "f"))), at}
+
+def DesignFile.has.go(fs: List<&2, DesignFile>, +ext: String, hit: Bool) -> Bool:
+  match fs hit:
+    case _ True{}:
+      True{}
+    case Nil{} False{}:
+      False{}
+    case DesignFile{+st, +rel} <> t False{}:
+      DesignFile.has.go(t, ext, Bool.and(Bool.not(String.eq(st, "D")), String.ends_with(rel, ext)))
+
+def DesignFile.has(fs: List<&2, DesignFile>, ext: String) -> Bool:
+  DesignFile.has.go(fs, ext, False{})
+
+def DesignRecord.has(row: DesignRecord, +ext: String) -> Bool:
+  match row:
+    case DesignRecord{_, _, _, _, _, _, fs, _}:
+      DesignFile.has(fs, ext)
+
+def DesignRecord.kind_key(+th: String, +kind: Nat) -> String:
+  Bool.pick(String, Nat.is_eq(kind, 0n), "@board:", Bool.pick(String, Nat.is_eq(kind, 1n), "@schematic:", "@other:")) ++ th
+
+def DesignRecord.add(r: Map<&2, List<&2, DesignRecord>> & List<&2, DesignRecord>, +th: String, row: DesignRecord) -> Map<&2, List<&2, DesignRecord>>:
+  (tab, rows) = r
+  Map.set(&2, List<&2, DesignRecord>, tab, th, row <> rows)
+
+def DesignRecord.kind_put(has: Bool, ix: Map<&2, List<&2, DesignRecord>>, +th: String, row: DesignRecord) -> Map<&2, List<&2, DesignRecord>>:
+  match has:
+    case False{}:
+      ix
+    case True{}:
+      DesignRecord.add(Map.get(List<&2, DesignRecord>, Nil{}, ix, th), th, row)
+
+def DesignRecord.index(ix: Map<&2, List<&2, DesignRecord>>, +th: String, +row: DesignRecord) -> Map<&2, List<&2, DesignRecord>>:
+  DesignRecord.kind_put(DesignRecord.has(row, ".kicad_sch"),
+    DesignRecord.kind_put(DesignRecord.has(row, ".kicad_pcb"),
+      DesignRecord.add(Map.get(List<&2, DesignRecord>, Nil{}, ix, th), th, row), DesignRecord.kind_key(th, 0n), row),
+    DesignRecord.kind_key(th, 1n), row)
+
+# Parse a design record when its event enters the projection. Drawing a
+# viewer must not parse every record again for each draft edit.
+def DesignRecord.put(m: Maybe<&2, J.Json>, ix: Map<&2, List<&2, DesignRecord>>, +th: String, +id: String, +at: Nat) -> Map<&2, List<&2, DesignRecord>>:
+  match m:
+    case None{}:
+      ix
+    case Some{body}:
+      DesignRecord.index(ix, th, DesignRecord.read(id, at, body))
+
+def DesignRecord.post(ix: Map<&2, List<&2, DesignRecord>>, e: Entry) -> Map<&2, List<&2, DesignRecord>>:
+  match e:
+    case Act{+id, +th, "step", _, text, +at}:
+      DesignRecord.put(J.Json.parse(text), ix, th, id, at)
+    case _:
+      ix
+
 type Ext is Data:
-  Ext{world: BT.World, by: Map<&2, List<&2, Entry>>}
+  Ext{world: BT.World, by: Map<&2, EntryLog>, design: Map<&2, List<&2, DesignRecord>>}
+
+def Ext.empty() -> Ext:
+  Ext{BT.World.empty(), Map.new(&2, EntryLog), Map.new(&2, List<&2, DesignRecord>)}
 
 def Ext.of(bw: List<&2, Ext>) -> Ext:
-  Maybe.default(&2, Ext, List.head(&2, Ext, bw), Ext{BT.World.empty(), Map.new(&2, List<&2, Entry>)})
+  Maybe.default(&2, Ext, List.head(&2, Ext, bw), Ext.empty())
 
 def Ext.world(x: Ext) -> BT.World:
   match x:
-    case Ext{w, _}:
+    case Ext{w, _, _}:
       w
 
-def Ext.by(x: Ext) -> Map<&2, List<&2, Entry>>:
+def Ext.by(x: Ext) -> Map<&2, EntryLog>:
   match x:
-    case Ext{_, by}:
+    case Ext{_, by, _}:
       by
 
 def Ext.with_world(f: BT.World -> BT.World, x: Ext) -> Ext:
   match x:
-    case Ext{w, by}:
-      Ext{f(w), by}
+    case Ext{w, by, design}:
+      Ext{f(w), by, design}
 
 def Ext.post(x: Ext, +e: Entry) -> Ext:
   match x:
-    case Ext{w, by}:
-      Ext{w, Idx.post(by, e)}
+    case Ext{w, by, design}:
+      Ext{w, Idx.post(by, e), DesignRecord.post(design, e)}
+
+# Clients prepare the history for a thread when they first show it.
+# The hub keeps its usual complete projection for native adoption.
+def Ext.ready.k(r: Map<&2, List<&2, DesignRecord>> & Bool) -> Bool:
+  (_, ready) = r
+  ready
+
+def Ext.ready(x: Ext, th: String) -> Bool:
+  match x:
+    case Ext{_, _, design}:
+      Ext.ready.k(Map.has(&2, List<&2, DesignRecord>, design, th))
+
+def Ext.post_client.k(ready: Bool, x: Ext, +e: Entry) -> Ext:
+  match ready x:
+    case True{} _:
+      Ext.post(x, e)
+    case False{} Ext{w, by, design}:
+      Ext{w, Idx.post(by, e), design}
+
+def Ext.post_client(+x: Ext, +e: Entry) -> Ext:
+  Ext.post_client.k(Ext.ready(x, Idx.thread(e)), x, e)
+
+def DesignRecord.load(es: List<&2, Entry>, ix: Map<&2, List<&2, DesignRecord>>) -> Map<&2, List<&2, DesignRecord>>:
+  match es:
+    case Nil{}:
+      ix
+    case e <> t:
+      DesignRecord.load(t, DesignRecord.post(ix, e))
+
+def Ext.prepare.k(ready: Bool, x: Ext, +th: String) -> Ext:
+  match ready x:
+    case True{} _:
+      x
+    case False{} Ext{w, +by, design}:
+      Ext{w, by, DesignRecord.load(List.reverse(&2, Entry, Idx.get(by, Idx.steps.key(th))),
+        Map.set(&2, List<&2, DesignRecord>, design, th, Nil{}))}
+
+def Ext.prepare(+x: Ext, +th: String) -> Ext:
+  Ext.prepare.k(Ext.ready(x, th), x, th)
+
+def Ext.count(x: Ext, th: String) -> Nat:
+  match x:
+    case Ext{_, by, _}:
+      Idx.count(by, th)
 
 type State is Data:
   State{
@@ -868,7 +1023,7 @@ type State is Data:
   }
 
 def State.empty() -> State:
-  State{Map.new(&2, Project), Map.new(&2, Thread), Nil{}, 0n, Map.new(&2, Task), Map.new(&2, String), Map.new(&2, List<&2, QItem>), Map.new(&2, Ask), Map.new(&2, Device), Map.new(&2, Nav), [Ext{BT.World.empty(), Map.new(&2, List<&2, Entry>)}]}
+  State{Map.new(&2, Project), Map.new(&2, Thread), Nil{}, 0n, Map.new(&2, Task), Map.new(&2, String), Map.new(&2, List<&2, QItem>), Map.new(&2, Ask), Map.new(&2, Device), Map.new(&2, Nav), [Ext.empty()]}
 
 # apply f to the thread at `id` (a blank, hidden thread when absent)
 def State.thread.fin(f: Thread -> Thread, ps: Map<&2, Project>, es: List<&2, Entry>, n: Nat, tk: Map<&2, Task>, sg: Map<&2, String>, qu: Map<&2, List<&2, QItem>>, ak: Map<&2, Ask>, dv: Map<&2, Device>, nv: Map<&2, Nav>, bw: List<&2, Ext>, id: String, r: Map<&2, Thread> & Thread) -> State:
@@ -915,6 +1070,32 @@ def State.steps(s: State, +th: String) -> List<&2, Entry>:
     case State{_, _, _, _, _, _, _, _, _, _, bw}:
       Idx.get(Ext.by(Ext.of(bw)), Idx.steps.key(th))
 
+def DesignRecord.rows(r: Map<&2, List<&2, DesignRecord>> & List<&2, DesignRecord>) -> List<&2, DesignRecord>:
+  (_, rows) = r
+  rows
+
+def Ext.design(x: Ext, +th: String) -> List<&2, DesignRecord>:
+  match x:
+    case Ext{_, _, design}:
+      DesignRecord.rows(Map.get(List<&2, DesignRecord>, Nil{}, design, th))
+
+def DesignRecord.owner.k(board: Bool, schematic: Bool, +key: String) -> String:
+  match board schematic:
+    case True{} _:
+      String.drop(key, 7n)
+    case False{} True{}:
+      String.drop(key, 11n)
+    case False{} False{}:
+      key
+
+def DesignRecord.owner(+key: String) -> String:
+  DesignRecord.owner.k(String.starts_with(key, "@board:"), String.starts_with(key, "@schematic:"), key)
+
+def State.design(s: State, +th: String) -> List<&2, DesignRecord>:
+  match s:
+    case State{_, _, _, _, _, _, _, _, _, _, bw}:
+      Ext.design(Ext.prepare(Ext.of(bw), DesignRecord.owner(th)), th)
+
 # every message between threads, newest first
 def State.links(s: State) -> List<&2, Entry>:
   match s:
@@ -924,6 +1105,16 @@ def State.links(s: State) -> List<&2, Entry>:
 def State.tick(s: State) -> State:
   State{ps, ts, es, n, tk, sg, qu, ak, dv, nv, bw} = s
   State{ps, ts, es, 1n+n, tk, sg, qu, ak, dv, nv, bw}
+
+# A browser restore files raw steps first. It parses only histories that
+# have been prepared, so unrelated threads cannot block the first frame.
+def State.post_client(s: State, +e: Entry) -> State:
+  State{ps, ts, es, n, tk, sg, qu, ak, dv, nv, bw} = s
+  State{ps, ts, e <> es, n, tk, sg, qu, ak, dv, nv, [Ext.post_client(Ext.of(bw), e)]}
+
+def State.prepare_design(s: State, th: String) -> State:
+  State{ps, ts, es, n, tk, sg, qu, ak, dv, nv, bw} = s
+  State{ps, ts, es, n, tk, sg, qu, ak, dv, nv, [Ext.prepare(Ext.of(bw), th)]}
 
 def State.message(s: State, +thread: String, msg: String, role: Role, text: String, +at: Nat) -> State:
   match role:
@@ -1149,28 +1340,6 @@ def Switch.session.key(+th: String, +p: String) -> String:
 def Switch.seen.key(+th: String, +p: String) -> String:
   "seen." ++ th ++ "." ++ p
 
-def Switch.count.k(hit: Bool, n: Nat) -> Nat:
-  match hit:
-    case True{}:
-      1n+n
-    case False{}:
-      n
-
-def Switch.of(e: Entry) -> String:
-  match e:
-    case Msg{_, t, _, _, _}:
-      t
-    case Act{_, t, _, _, _, _}:
-      t
-
-# how many entries a thread has
-def Switch.count(es: List<&2, Entry>, +th: String) -> Nat:
-  match es:
-    case Nil{}:
-      0n
-    case +e <> t:
-      Switch.count.k(String.eq(Switch.of(e), th), Switch.count(t, th))
-
 def Switch.prov(t: Thread) -> String:
   match t:
     case Thread{_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, pr, _, _, _, _, _}:
@@ -1190,6 +1359,11 @@ def State.entries.all(s: State) -> List<&2, Entry>:
     case State{_, _, es, _, _, _, _, _, _, _, _}:
       es
 
+def State.entry_count(s: State, th: String) -> Nat:
+  match s:
+    case State{_, _, _, _, _, _, _, _, _, _, bw}:
+      Ext.count(Ext.of(bw), th)
+
 def State.thread.get.k(r: Map<&2, Thread> & Thread) -> Thread:
   (_, t) = r
   t
@@ -1200,7 +1374,7 @@ def State.thread.get(s: State, +id: String) -> Thread:
       State.thread.get.k(Map.get(Thread, Thread.blank(id), ts, id))
 
 def State.switch.k(+s: State, +th: String, +old: String, +oldse: String, +p: String, m: String) -> State:
-  +s1 = State.setting(State.setting(s, Switch.session.key(th, old), oldse), Switch.seen.key(th, old), Nat.show(Switch.count(State.entries.all(s), th)))
+  +s1 = State.setting(State.setting(s, Switch.session.key(th, old), oldse), Switch.seen.key(th, old), Nat.show(State.entry_count(s, th)))
   State.thread((t => Switch.set(p, m, Setting.get(s1, Switch.session.key(th, p), ""), t)), s1, th)
 
 def State.switch(+s: State, +th: String, +p: String, m: String) -> State:
@@ -1543,6 +1717,13 @@ def State.apply(s: State, e: Change) -> State:
   State.tick(State.apply.go(s, e))
 
 # the read model after a log, oldest event first
+def State.apply_client(s: State, +c: Change) -> State:
+  match c:
+    case ActivityLogged{thread, act, "step", kind, summary, at}:
+      State.tick(State.post_client(s, Act{act, thread, "step", kind, summary, at}))
+    case _:
+      State.apply(s, c)
+
 def State.replay(es: List<&2, Change>, s: State) -> State:
   match es:
     case Nil{}:

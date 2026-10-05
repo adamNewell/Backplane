@@ -8,6 +8,8 @@
 import App from "./app.bend";
 import * as Solid from "./solid.js";
 import * as Plot2d from "./plot2d.js";
+import { HistoryCache } from "./history-cache.js";
+import { wireDecoder } from "./wire.js";
 
 // JSON <-> Bend Json
 // ------------------
@@ -30,13 +32,7 @@ function toJson(v) {
   return { $: "Obj", fields };
 }
 
-// bytes <-> Bend List<U32>
-function toList(u8) {
-  let xs = { $: "Nil" };
-  for (let i = u8.length - 1; i >= 0; i -= 1) xs = { $: "Con", head: u8[i], tail: xs };
-  return xs;
-}
-
+// Bend List<U32> -> bytes
 function fromList(xs) {
   const out = [];
   for (const b of each(xs)) out.push(b);
@@ -46,6 +42,8 @@ function fromList(xs) {
 function* each(list) {
   for (let xs = list; xs && xs.$ === "Con"; xs = xs.tail) yield xs.head;
 }
+
+const decodeWire = wireDecoder([...each(App.wire_keys())], [...each(App.wire_words())], App.wire_rules(), App.wire_key_text);
 
 // DOM patch
 // ---------
@@ -716,33 +714,10 @@ if (token) document.cookie = `bp_token=${token}; path=/; SameSite=Strict`;
 // The event log this page holds, kept across reloads: a reload shows it at
 // once and the socket then brings only what is new (since=, origin=). Raw
 // server items only; the page state is rebuilt from them by app.bend.
-const CACHE = "backplane-log";
-let cache = (() => {
-  try {
-    return JSON.parse(localStorage.getItem(CACHE) ?? "null");
-  } catch {
-    return null;
-  }
-})();
-
-function keep(msg) {
-  if (msg.t === "log") {
-    cache = { origin: msg.origin ?? "", items: msg.since > 0 && cache ? cache.items.concat(msg.items) : msg.items };
-  } else if (msg.t === "changes" && cache) {
-    cache.items = cache.items.concat(msg.items);
-  } else {
-    return;
-  }
-  try {
-    localStorage.setItem(CACHE, JSON.stringify(cache));
-  } catch {
-    localStorage.removeItem(CACHE); // over quota: start from the server next time
-  }
-}
-
-if (cache && Array.isArray(cache.items)) {
-  ui = App.recv(ui, toJson({ t: "log", since: 0, origin: cache.origin, items: cache.items })).ui;
-}
+const historyCache = new HistoryCache();
+// The old cache is only a copy of the hub log. Its synchronous storage
+// cannot hold large histories; drafts still use their own small keys.
+try { localStorage.removeItem("backplane-log"); } catch {}
 
 function connect() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -774,8 +749,8 @@ function connect() {
       else if (o) Plot2d.got(o, at);
       return;
     }
-    const j = App.wire_in(toList(bytes));
-    keep(JSON.parse(App.show(j)));
+    const { json: j, value } = decodeWire(bytes);
+    historyCache.keep(value);
     const r = App.recv(ui, j);
     ui = r.ui;
     run(r.cmds);
@@ -798,8 +773,14 @@ setInterval(() => {
   later();
 }, 30000);
 
-connect();
+// Restore before connecting so the socket requests only missing events.
+// A denied or unavailable database starts from the authoritative hub.
 render();
+historyCache.load().then((cache) => {
+  if (cache) ui = App.recv(ui, toJson(cache)).ui;
+  later();
+  connect();
+});
 
 // the app shell works offline where the browser allows it (HTTPS or localhost)
 if ("serviceWorker" in navigator && window.isSecureContext) {

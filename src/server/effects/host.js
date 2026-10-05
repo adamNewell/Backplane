@@ -91,24 +91,32 @@ function sock_save_need() {
   return { read: true };
 }
 
-function host_send(socket, b) {
+function host_send(socket, b, k) {
   const sys = io_sys();
+  const deadline = performance.now() + 30000;
   let at = 0;
-  while (at < b.length) {
-    const n = Number(sys.send(socket, sys.ptr(b.subarray(at)), BigInt(b.length - at), 0x4000));
-    if (n < 0) {
-      const code = sys.errno();
-      if (code === (sys.mac ? 35 : 11)) {
-        continue;
+  const go = () => {
+    while (at < b.length) {
+      if (performance.now() >= deadline) return io_tup(socket, io_fail(sys.mac ? 60 : 110));
+      const n = Number(sys.send(socket, sys.ptr(b.subarray(at)), BigInt(b.length - at), 0x4000));
+      if (n < 0) {
+        const code = sys.errno();
+        if (code === 4) continue;
+        if (code === (sys.mac ? 35 : 11)) {
+          io_park_on(socket, true, k, go, deadline);
+          return undefined;
+        }
+        return io_tup(socket, io_fail(code));
       }
-      return io_tup(socket, io_fail(code));
+      if (n === 0) return io_tup(socket, io_fail(32));
+      at += n;
     }
-    at += n;
-  }
-  return io_tup(socket, io_done({ $: "Unit" }));
+    return io_tup(socket, io_done({ $: "Unit" }));
+  };
+  return go();
 }
 
-function sock_send_bytes(socket, data) {
+function sock_send_bytes(socket, data, k) {
   const bytes = [];
   for (let xs = data; xs.$ === "Con"; xs = xs.tail) {
     bytes.push(xs.head);
@@ -116,11 +124,11 @@ function sock_send_bytes(socket, data) {
   if (bytes.some((x) => x > 255)) {
     return io_tup(socket, io_fail(22));
   }
-  return host_send(socket, Uint8Array.from(bytes));
+  return host_send(socket, Uint8Array.from(bytes), k);
 }
 
-function sock_send_text(socket, text) {
-  return host_send(socket, io_bytes(text));
+function sock_send_text(socket, text, k) {
+  return host_send(socket, io_bytes(text), k);
 }
 
 function sock_dup(socket) {
@@ -227,4 +235,9 @@ function sys_exec(path, args) {
 
 function sys_exe_path() {
   return process.argv[1] ?? "";
+}
+
+function sock_abort(socket) {
+  host_libc().shutdown(socket, 2);
+  return socket;
 }

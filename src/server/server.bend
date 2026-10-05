@@ -62,7 +62,7 @@ type Wire is Data:
   WPong{payload: List<&2, U32>}
   # a message already encoded (a board's plot: never parsed again)
   WBin{cbor: List<&2, U32>}
-  WClose{}
+  WClose{payload: List<&2, U32>, done: Chan(Unit)}
   # the hub's own window: the read model itself, with the log message's
   # head (no items), in place of the log as text
   WState{st: M.State, head: String}
@@ -412,16 +412,34 @@ def Conn.finish(s: Socket, bs: List<&2, U32>) -> IO(Unit):
 def Conn.frame.out(t: String) -> List<&2, U32>:
   W.Ws.cbor(t)
 
-def Conn.write(m: Maybe<&1, Wire>, s: Socket, k: Socket -> IO(Unit)) -> IO(Unit):
+# A failed writer must release producers blocked on its queue.
+def Conn.write.sent(r: Socket & Result<&1, &1, U32 & String, Unit>, out: Chan(Wire), k: Socket -> IO(Unit)) -> IO(Unit):
+  (s, res) = r
+  match res:
+    case Done{_}:
+      k(s)
+    case Fail{_}:
+      do IO<Unit>:
+        Chan.close(Wire, out)
+        s2 : Socket <- H.Sock.abort(s)
+        Socket.close(s2)
+
+def Conn.write.bytes(s: Socket, bs: List<&2, U32>, out: Chan(Wire), k: Socket -> IO(Unit)) -> IO(Unit):
+  IO.bind(Socket & Result<&1, &1, U32 & String, Unit>, Unit, H.Sock.send_bytes(s, bs), r => Conn.write.sent(r, out, k))
+
+def Conn.write(m: Maybe<&1, Wire>, s: Socket, +out: Chan(Wire), k: Socket -> IO(Unit)) -> IO(Unit):
   match m:
     case Some{WText{t}}:
-      IO.bind(Socket, Unit, Conn.send(s, Conn.frame.out(t)), k)
+      Conn.write.bytes(s, Conn.frame.out(t), out, k)
     case Some{WPong{p}}:
-      IO.bind(Socket, Unit, Conn.send(s, W.Ws.encode(10, p)), k)
+      Conn.write.bytes(s, W.Ws.encode(10, p), out, k)
     case Some{WBin{bs}}:
-      IO.bind(Socket, Unit, Conn.send(s, W.Ws.encode(2, bs)), k)
-    case Some{WClose{}}:
-      Conn.finish(s, W.Ws.encode(8, Nil{}))
+      Conn.write.bytes(s, W.Ws.encode(2, bs), out, k)
+    case Some{WClose{p, done}}:
+      do IO<Unit>:
+        Conn.finish(s, W.Ws.encode(8, p))
+        ok : Bool <- Chan.send(Unit, done, Unit{})
+        return Unit{}
     case Some{WState{_, _}}:
       k(s)
     case None{}:
@@ -433,7 +451,7 @@ def Conn.writer(fuel: Nat, s: Socket, +out: Chan(Wire)) -> IO(Unit):
     case 0n:
       Socket.close(s)
     case 1n+f:
-      IO.bind(Maybe<&1, Wire>, Unit, Chan.recv(Wire, out), m => Conn.write(m, s, s2 => Conn.writer(f, s2, out)))
+      IO.bind(Maybe<&1, Wire>, Unit, Chan.recv(Wire, out), m => Conn.write(m, s, out, s2 => Conn.writer(f, s2, out)))
 
 def Conn.leave(s: Socket, +id: U32, +inbox: Chan(Msg)) -> IO(Unit):
   do IO<Unit>:
@@ -449,6 +467,26 @@ def Conn.cbor.json(m: Maybe<&2, J.Json>) -> String:
     case None{}:
       ""
 
+# Bound both queue admission and close acknowledgement. Closing either
+# channel wakes its blocked operations, even if the writer has failed.
+def Conn.close.deadline(done: Chan(Unit), out: Chan(Wire)) -> IO(Unit):
+  do IO<Unit>:
+    IO.sleep(5000)
+    Chan.close(Unit, done)
+    Chan.close(Wire, out)
+
+def Conn.close.queued(ok: Bool, +done: Chan(Unit)) -> IO(Bool):
+  match ok:
+    case True{}:
+      do IO<Bool>:
+        ack : Maybe<&1, Unit> <- Chan.recv(Unit, done)
+        Chan.close(Unit, done)
+        return False{}
+    case False{}:
+      do IO<Bool>:
+        Chan.close(Unit, done)
+        return False{}
+
 def Conn.frame.k(bin: Bool, close: Bool, ping: Bool, p: List<&2, U32>, +id: U32, +inbox: Chan(Msg), +out: Chan(Wire)) -> IO(Bool):
   match bin close ping:
     case True{} _ _:
@@ -456,7 +494,11 @@ def Conn.frame.k(bin: Bool, close: Bool, ping: Bool, p: List<&2, U32>, +id: U32,
         ok : Bool <- Chan.send(Msg, inbox, Rpc{id, Conn.cbor.json(CB.Cbor.decode(p))})
         return True{}
     case False{} True{} _:
-      IO.pure(Bool, False{})
+      do IO<Bool>:
+        +done : Chan(Unit) <- Chan.new(Unit, 1)
+        IO.spawn(Unit, Conn.close.deadline(done, out))
+        ok : Bool <- Chan.send(Wire, out, WClose{p, done})
+        Conn.close.queued(ok, done)
     case False{} False{} True{}:
       do IO<Bool>:
         ok : Bool <- Chan.send(Wire, out, WPong{p})
@@ -487,7 +529,7 @@ def Conn.after(go: Bool, s: Socket, rest: List<&2, U32>, +id: U32, +inbox: Chan(
     case True{}:
       k(s, rest)
     case False{}:
-      Conn.leave(s, id, inbox)
+      IO.bind(Socket, Unit, H.Sock.abort(s), s2 => Conn.leave(s2, id, inbox))
 
 def Conn.decoded(m: Maybe<&2, W.Got>, s: Socket, +buf: List<&2, U32>, +id: U32, +inbox: Chan(Msg), +out: Chan(Wire),
     k: Socket -> List<&2, U32> -> IO(Unit)) -> IO(Unit):

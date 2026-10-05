@@ -290,12 +290,15 @@ def Dec.keyidx(m: Maybe<&2, U32>, +ks: List<&2, String>) -> Maybe<&2, String>:
     case None{}:
       None{}
 
+def Cbor.key_text(raw: String, ks: List<&2, String>) -> Maybe<&2, String>:
+  Dec.keyidx(U32.read(raw), ks)
+
 def Dec.keyof(v: J.Json, +ks: List<&2, String>) -> Maybe<&2, String>:
   match v:
     case J.Str{k}:
       Some{k}
     case J.Num{r}:
-      Dec.keyidx(U32.read(r), ks)
+      Cbor.key_text(r, ks)
     case _:
       None{}
 
@@ -372,85 +375,157 @@ def Dec.obj.k(empty: Bool, +n: U32, stack: List<&2, Frame>, +ks: List<&2, String
     case False{}:
       SHead{FObj{U32.to_nat(n), Nil{}, None{}} <> stack, TNone{}}
 
-# an item whose head (major type and argument n) is complete
-def Dec.item(major: Nat, tag: Tag, stack: List<&2, Frame>, +n: U32, +ks: List<&2, String>, +ws: List<&2, String>) -> St:
+# The wire grammar is shared by both byte readers. The browser gets a
+# table made from these rules; it does not define a second CBOR grammar.
+type WireKind is Data:
+  KInteger{}
+  KNegative{}
+  KWord{}
+  KText{}
+  KNumberText{}
+  KArray{}
+  KObject{}
+  KWordTag{}
+  KNumberTag{}
+  KFalseValue{}
+  KTrueValue{}
+  KNullValue{}
+  KBad{}
+
+type Rule is Data:
+  Rule{kind: WireKind, extra: U32}
+
+def Head.value(major: U32, tag: Tag) -> WireKind:
   match major tag:
-    case 0n TNone{}:
-      Dec.put(stack, J.Num{U32.show(n)}, ks)
-    case 0n TWord{}:
-      Dec.word(Cbor.nth(ws, n), stack, ks)
-    case 1n TNone{}:
-      Dec.put(stack, J.Num{Dec.negs(n)}, ks)
-    case 3n TNone{}:
-      Dec.text.k(U32.is_eq(n, 0), n, TNone{}, stack, ks)
-    case 3n TNum{}:
-      Dec.text.k(U32.is_eq(n, 0), n, TNum{}, stack, ks)
-    case 4n TNone{}:
-      Dec.arr.k(U32.is_eq(n, 0), n, stack, ks)
-    case 5n TNone{}:
-      Dec.obj.k(U32.is_eq(n, 0), n, stack, ks)
+    case 0 TNone{}:
+      KInteger{}
+    case 0 TWord{}:
+      KWord{}
+    case 1 TNone{}:
+      KNegative{}
+    case 3 TNone{}:
+      KText{}
+    case 3 TNum{}:
+      KNumberText{}
+    case 4 TNone{}:
+      KArray{}
+    case 5 TNone{}:
+      KObject{}
     case _ _:
+      KBad{}
+
+def Head.argument(ai: U32, kind: WireKind) -> Rule:
+  match ai:
+    case 24:
+      Rule{kind, 1}
+    case 25:
+      Rule{kind, 2}
+    case 26:
+      Rule{kind, 4}
+    case _:
+      Rule{KBad{}, 0}
+
+def Head.length(short: Bool, ai: U32, kind: WireKind) -> Rule:
+  match short:
+    case True{}:
+      Rule{kind, 0}
+    case False{}:
+      Head.argument(ai, kind)
+
+def Head.tag(ai: U32) -> Rule:
+  match ai:
+    case 6:
+      Rule{KWordTag{}, 0}
+    case 7:
+      Rule{KNumberTag{}, 0}
+    case _:
+      Rule{KBad{}, 0}
+
+def Head.simple(ai: U32) -> Rule:
+  match ai:
+    case 20:
+      Rule{KFalseValue{}, 0}
+    case 21:
+      Rule{KTrueValue{}, 0}
+    case 22:
+      Rule{KNullValue{}, 0}
+    case _:
+      Rule{KBad{}, 0}
+
+def Head.read(major: U32, +ai: U32, +tag: Tag) -> Rule:
+  match major tag:
+    case 6 TNone{}:
+      Head.tag(ai)
+    case 7 TNone{}:
+      Head.simple(ai)
+    case 6 _:
+      Rule{KBad{}, 0}
+    case 7 _:
+      Rule{KBad{}, 0}
+    case _ _:
+      Head.length(U32.is_lt(ai, 24), ai, Head.value(major, tag))
+
+# an item whose head (major type and argument n) is complete
+def Dec.value(kind: WireKind, stack: List<&2, Frame>, +n: U32, +ks: List<&2, String>, +ws: List<&2, String>) -> St:
+  match kind:
+    case KInteger{}:
+      Dec.put(stack, J.Num{U32.show(n)}, ks)
+    case KWord{}:
+      Dec.word(Cbor.nth(ws, n), stack, ks)
+    case KNegative{}:
+      Dec.put(stack, J.Num{Dec.negs(n)}, ks)
+    case KText{}:
+      Dec.text.k(U32.is_eq(n, 0), n, TNone{}, stack, ks)
+    case KNumberText{}:
+      Dec.text.k(U32.is_eq(n, 0), n, TNum{}, stack, ks)
+    case KArray{}:
+      Dec.arr.k(U32.is_eq(n, 0), n, stack, ks)
+    case KObject{}:
+      Dec.obj.k(U32.is_eq(n, 0), n, stack, ks)
+    case _:
       SBad{}
 
-def Dec.tag.k(w: Bool, n: Bool, stack: List<&2, Frame>) -> St:
-  match w n:
-    case True{} _:
+def Dec.item(major: U32, tag: Tag, stack: List<&2, Frame>, n: U32, ks: List<&2, String>, ws: List<&2, String>) -> St:
+  Dec.value(Head.value(major, tag), stack, n, ks, ws)
+
+def Dec.rule(r: Rule, maj: U32, ai: U32, stack: List<&2, Frame>, tag: Tag, +ks: List<&2, String>, ws: List<&2, String>) -> St:
+  match r:
+    case Rule{KBad{}, _}:
+      SBad{}
+    case Rule{KWordTag{}, _}:
       SHead{stack, TWord{}}
-    case False{} True{}:
+    case Rule{KNumberTag{}, _}:
       SHead{stack, TNum{}}
-    case False{} False{}:
-      SBad{}
-
-def Dec.tag(tag: Tag, +ai: U32, stack: List<&2, Frame>) -> St:
-  match tag:
-    case TNone{}:
-      Dec.tag.k(U32.is_eq(ai, 6), U32.is_eq(ai, 7), stack)
-    case _:
-      SBad{}
-
-def Dec.simple.k(f: Bool, t: Bool, z: Bool, stack: List<&2, Frame>, +ks: List<&2, String>) -> St:
-  match f t z:
-    case True{} _ _:
+    case Rule{KFalseValue{}, _}:
       Dec.put(stack, J.Flag{False{}}, ks)
-    case False{} True{} _:
+    case Rule{KTrueValue{}, _}:
       Dec.put(stack, J.Flag{True{}}, ks)
-    case False{} False{} True{}:
+    case Rule{KNullValue{}, _}:
       Dec.put(stack, J.Null{}, ks)
-    case False{} False{} False{}:
-      SBad{}
-
-def Dec.simple(tag: Tag, +ai: U32, stack: List<&2, Frame>, +ks: List<&2, String>) -> St:
-  match tag:
-    case TNone{}:
-      Dec.simple.k(U32.is_eq(ai, 20), U32.is_eq(ai, 21), U32.is_eq(ai, 22), stack, ks)
-    case _:
-      SBad{}
-
-def Dec.head.k(t6: Bool, t7: Bool, lt: Bool, a1: Bool, a2: Bool, a4: Bool, +maj: U32, +ai: U32, stack: List<&2, Frame>, tag: Tag, +ks: List<&2, String>, +ws: List<&2, String>) -> St:
-  match t6 t7 lt a1 a2 a4:
-    case True{} _ _ _ _ _:
-      Dec.tag(tag, ai, stack)
-    case False{} True{} _ _ _ _:
-      Dec.simple(tag, ai, stack, ks)
-    case False{} False{} True{} _ _ _:
-      Dec.item(U32.to_nat(maj), tag, stack, ai, ks, ws)
-    case False{} False{} False{} True{} _ _:
-      SArg{stack, tag, maj, 1, 0}
-    case False{} False{} False{} False{} True{} _:
-      SArg{stack, tag, maj, 2, 0}
-    case False{} False{} False{} False{} False{} True{}:
-      SArg{stack, tag, maj, 4, 0}
-    case False{} False{} False{} False{} False{} False{}:
-      SBad{}
+    case Rule{kind, 0}:
+      Dec.value(kind, stack, ai, ks, ws)
+    case Rule{_, extra}:
+      SArg{stack, tag, maj, extra, 0}
 
 # an initial byte: major type in the top 3 bits, additional info in the low 5
-def Dec.head(+maj: U32, +ai: U32, stack: List<&2, Frame>, tag: Tag, +ks: List<&2, String>, +ws: List<&2, String>) -> St:
-  Dec.head.k(U32.is_eq(maj, 6), U32.is_eq(maj, 7), U32.is_lt(ai, 24), U32.is_eq(ai, 24), U32.is_eq(ai, 25), U32.is_eq(ai, 26), maj, ai, stack, tag, ks, ws)
+def Dec.head(+maj: U32, +ai: U32, stack: List<&2, Frame>, +tag: Tag, ks: List<&2, String>, ws: List<&2, String>) -> St:
+  Dec.rule(Head.read(maj, ai, tag), maj, ai, stack, tag, ks, ws)
+
+# Each table has all 256 possible initial bytes, in byte order.
+def Cbor.rules.go(left: Nat, +tag: Tag, +byte: U32) -> List<&2, Rule>:
+  match left:
+    case 0n:
+      Nil{}
+    case 1n+p:
+      Head.read(U32.shrn(byte, 5n), U32.and(byte, 31), tag) <> Cbor.rules.go(p, tag, (byte + 1 : U32))
+
+def Cbor.rules() -> List<&2, List<&2, Rule>>:
+  [Cbor.rules.go(256n, TNone{}, 0), Cbor.rules.go(256n, TWord{}, 0), Cbor.rules.go(256n, TNum{}, 0)]
 
 def Dec.arg.k(last: Bool, stack: List<&2, Frame>, tag: Tag, +maj: U32, +need: U32, +acc: U32, +ks: List<&2, String>, +ws: List<&2, String>) -> St:
   match last:
     case True{}:
-      Dec.item(U32.to_nat(maj), tag, stack, acc, ks, ws)
+      Dec.item(maj, tag, stack, acc, ks, ws)
     case False{}:
       SArg{stack, tag, maj, (need - 1 : U32), acc}
 

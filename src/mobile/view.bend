@@ -1,5 +1,6 @@
 import Base
 import ../core/json.bend as J
+import ../core/model.bend as M
 import ../core/client.bend as U
 import ../app/viewer.bend as V
 import ../core/look.bend as LO
@@ -527,7 +528,7 @@ def Mech.json(on: Bool, +u: U.Ui) -> J.Json:
 # what Hs.bar says, the scrubber's ticks (id "" the live file, on the
 # one shown), the menu of versions while one is open, and the legend's
 # colours (0xRRGGBB)
-def Hist.ticks(ss: List<&2, HS.Step>, +i: Nat, +at: Nat) -> List<&2, J.Json>:
+def Hist.ticks(ss: List<&2, M.DesignRecord>, +i: Nat, +at: Nat) -> List<&2, J.Json>:
   match ss:
     case Nil{}:
       [J.Json.obj([J.KV{"id", J.Str{""}}, J.KV{"on", J.Json.bool(Nat.is_eq(at, 0n))}])]

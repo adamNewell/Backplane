@@ -33,7 +33,12 @@ const done = new Promise<void>((resolve) => {
 });
 ws.onerror = () => fail("websocket failed");
 await Promise.race([done, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 5000))]).catch((e) => fail(String(e)));
-ws.close();
+const closed = new Promise<CloseEvent>((resolve) => { ws.onclose = resolve; });
+ws.close(1000, "smoke complete");
+const close = await Promise.race([closed, new Promise<never>((_, reject) =>
+  setTimeout(() => reject(new Error("close timeout")), 5000))]).catch((e) => fail(String(e)));
+if (!close || close.code !== 1000 || !close.wasClean || close.reason !== "smoke complete")
+  fail("websocket close handshake failed");
 
 const log = await Bun.file(`${home}/events.jsonl`).text();
 if (!log.includes('"ThreadCreated"') || !log.includes('"ProjectCreated"')) fail("events.jsonl missing changes");
