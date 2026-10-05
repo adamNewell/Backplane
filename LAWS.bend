@@ -3388,6 +3388,13 @@ law shows_changes:
 # reads the open thread's page and the sidebar's links without walking
 # every thread's log. What is filed is what the walk finds: a thread's
 # page, the messages it sent included, and the links.
+# Ownership counts exclude copies filed only under a sender.
+law entry_count_own:
+  {M.State.entry_count(M.Idx.demo(), "t1") == 2n : Nat}
+
+law entry_count_receiver:
+  {M.State.entry_count(M.Idx.demo(), "t2") == 3n : Nat}
+
 law idx_page_own:
   {L.TL.newest(M.State.mine(M.Idx.demo(), "t2"), "t2", 0n, L.NW{60n, []}) == L.TL.newest(U.Ui.entries(M.Idx.demo()), "t2", 0n, L.NW{60n, []}) : List<&2, M.Entry>}
 
@@ -4048,7 +4055,7 @@ law hist_back_live_last:
 
 # no step is named: the live file
 law hist_index_live:
-  for ss: List<&2, HS.Step>
+  for ss: List<&2, M.DesignRecord>
   {HS.Hist.index(ss, "") == 0n : Nat}
 
 # a capture that changed nothing logs nothing
@@ -4215,3 +4222,7 @@ law keys_names_of_lines:
 
 law keys_prompt_none:
   {AK.Keys.prompt("/h/secrets/api.env", "") == "" : String}
+
+# A history read from a deferred client projection equals the hub history.
+law hist_client_deferred:
+  {M.State.design(M.State.apply_client(M.State.empty(), M.ActivityLogged{"t", "s", "step", "kicad", "{\"e\":\"m\",\"c\":\"c\",\"p\":\"\",\"g\":\"/g\",\"t\":\"/t\",\"f\":[\"M\\ta.kicad_pcb\"]}", 1n}), "@board:t") == M.State.design(M.State.apply(M.State.empty(), M.ActivityLogged{"t", "s", "step", "kicad", "{\"e\":\"m\",\"c\":\"c\",\"p\":\"\",\"g\":\"/g\",\"t\":\"/t\",\"f\":[\"M\\ta.kicad_pcb\"]}", 1n}), "@board:t") : List<&2, M.DesignRecord>}

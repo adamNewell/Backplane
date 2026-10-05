@@ -45,6 +45,11 @@ def Sock.shutdown(sock: Socket) -> IO(Socket):
   import "./effects/host.c"
   import "./effects/host.js"
 
+# Stop both halves after a failed writer, including a parked reader.
+def Sock.abort(sock: Socket) -> IO(Socket):
+  import "./effects/host.c"
+  import "./effects/host.js"
+
 # start cmd in cwd; stdin+stdout are the returned socket. err: 0 drop
 # stderr, 1 merge it into stdout, 2 inherit
 def Proc.spawn(cmd: String, args: List<&2, String>, cwd: String, err: U32) ->

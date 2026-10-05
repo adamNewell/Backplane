@@ -93,15 +93,15 @@ def seq(u: U.Ui) -> String:
 def origin(u: U.Ui) -> String:
   U.Ui.info(u, "origin")
 
-# The wire: CBOR bytes in and out (the host only moves them)
-def wire_in(bs: List<&2, U32>) -> J.Json:
-  Maybe.default(&2, J.Json, C.Cbor.decode(bs), J.Null{})
+# The browser decodes bytes directly, using the same wire dictionaries.
+def wire_keys() -> List<&2, String>:
+  C.Cbor.keys()
+
+def wire_words() -> List<&2, String>:
+  C.Cbor.words()
 
 def wire_out(text: String) -> List<&2, U32>:
   C.Cbor.encode(Maybe.default(&2, J.Json, J.Json.parse(text), J.Null{}))
-
-def show(j: J.Json) -> String:
-  J.Json.show(j)
 
 # how many bytes of a file go in one upload piece
 def chunk() -> String:
@@ -169,3 +169,11 @@ def lb_busy(lb: LB.Lb, now: Nat) -> Bool:
 
 def lb_css(lb: LB.Lb, b: LB.LbBox, now: Nat) -> String:
   LB.Lb.css(lb, b, now)
+
+
+def wire_rules() -> List<&2, List<&2, C.Rule>>:
+  C.Cbor.rules()
+
+
+def wire_key_text(raw: String) -> Maybe<&2, String>:
+  C.Cbor.key_text(raw, C.Cbor.keys())

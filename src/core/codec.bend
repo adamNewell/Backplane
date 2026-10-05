@@ -283,129 +283,126 @@ def Change.encode(c: M.Change) -> J.Json:
     case M.SpacePageSet{bot, html, at}:
       Change.obj("SpacePageSet", [J.KV{"bot", J.Str{bot}}, J.KV{"html", J.Str{html}}, J.KV{"at", Codec.nat(at)}])
 
-def Change.tags() -> List<&2, String>:
-  ["ProjectCreated", "ProjectRemoved", "ThreadCreated", "ThreadRenamed", "MessagePosted", "TurnChanged", "PendingChanged", "ActivityLogged", "ThreadSettled", "ThreadUnsettled", "ThreadArchived", "ThreadPinned", "ThreadDeleted", "WorktreeSet", "SessionSet", "ModesSet", "TaskDelegated", "TaskStateSet", "TaskDelivered", "SettingSet", "TurnQueued", "QueueTaken", "AskOpened", "AskClosed", "DeviceRegistered", "DeviceDropped", "ThreadSnoozed", "ThreadOrdered", "WorktreeSkipped", "ThreadMerged", "WorktreeRemoved", "ProjectOrdered", "QueueEdited", "QueueRemoved", "QueueMoved", "QueueTakenOne", "ThreadForked", "ProviderSet", "TodosSet", "UsageSet", "BotSet", "BotDeleted", "RoomSet", "RoomDeleted", "RoomPosted", "HookSet", "HookHit", "RoutineSet", "RoutineDeleted", "RoutineFired", "MemorySaved", "MemoryForgot", "SpaceSet", "PeerSet", "BotWoke", "SpacePageSet"]
-
-def Change.decode.k(i: Nat, +o: J.Json) -> Maybe<&2, M.Change>:
-  match i:
-    case 0n:
+def Change.decode.k(tag: String, +o: J.Json) -> Maybe<&2, M.Change>:
+  match tag:
+    case "ProjectCreated":
       Some{M.ProjectCreated{J.Json.get_str(o, "id", ""), J.Json.get_str(o, "title", ""), J.Json.get_str(o, "root", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 1n:
+    case "ProjectRemoved":
       Some{M.ProjectRemoved{J.Json.get_str(o, "id", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 2n:
+    case "ThreadCreated":
       Some{M.ThreadCreated{J.Json.get_str(o, "id", ""), J.Json.get_str(o, "project", ""), J.Json.get_str(o, "title", ""), Env.of(J.Json.get_str(o, "env", "")), J.Json.get_str(o, "branch", ""), J.Json.get_str(o, "worktree", ""), J.Json.get_str(o, "provider", ""), J.Json.get_str(o, "model", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 3n:
+    case "ThreadRenamed":
       Some{M.ThreadRenamed{J.Json.get_str(o, "id", ""), J.Json.get_str(o, "title", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 4n:
+    case "MessagePosted":
       Some{M.MessagePosted{J.Json.get_str(o, "thread", ""), J.Json.get_str(o, "msg", ""), Role.of(J.Json.get_str(o, "role", "")), J.Json.get_str(o, "text", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 5n:
+    case "TurnChanged":
       Some{M.TurnChanged{J.Json.get_str(o, "thread", ""), Turn.of(J.Json.get_str(o, "state", "")), J.Json.get_nat(o, "at", 0n)}}
-    case 6n:
+    case "PendingChanged":
       Some{M.PendingChanged{J.Json.get_str(o, "thread", ""), J.Json.get_nat(o, "count", 0n), J.Json.get_nat(o, "at", 0n)}}
-    case 7n:
+    case "ActivityLogged":
       Some{M.ActivityLogged{J.Json.get_str(o, "thread", ""), J.Json.get_str(o, "act", ""), J.Json.get_str(o, "tone", ""), J.Json.get_str(o, "kind", ""), J.Json.get_str(o, "summary", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 8n:
+    case "ThreadSettled":
       Some{M.ThreadSettled{J.Json.get_str(o, "id", ""), J.Json.get_bool(o, "manual", False{}), J.Json.get_nat(o, "at", 0n)}}
-    case 9n:
+    case "ThreadUnsettled":
       Some{M.ThreadUnsettled{J.Json.get_str(o, "id", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 10n:
+    case "ThreadArchived":
       Some{M.ThreadArchived{J.Json.get_str(o, "id", ""), J.Json.get_bool(o, "archived", False{}), J.Json.get_nat(o, "at", 0n)}}
-    case 11n:
+    case "ThreadPinned":
       Some{M.ThreadPinned{J.Json.get_str(o, "id", ""), J.Json.get_bool(o, "pinned", False{}), J.Json.get_nat(o, "at", 0n)}}
-    case 12n:
+    case "ThreadDeleted":
       Some{M.ThreadDeleted{J.Json.get_str(o, "id", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 13n:
+    case "WorktreeSet":
       Some{M.WorktreeSet{J.Json.get_str(o, "id", ""), J.Json.get_str(o, "branch", ""), J.Json.get_str(o, "worktree", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 14n:
+    case "SessionSet":
       Some{M.SessionSet{J.Json.get_str(o, "id", ""), J.Json.get_str(o, "session", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 15n:
+    case "ModesSet":
       Some{M.ModesSet{J.Json.get_str(o, "id", ""), Runtime.of(J.Json.get_str(o, "runtime", "")), Interaction.of(J.Json.get_str(o, "interaction", "")), J.Json.get_str(o, "model", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 16n:
+    case "TaskDelegated":
       Some{M.TaskDelegated{J.Json.get_str(o, "task", ""), J.Json.get_str(o, "parent", ""), J.Json.get_str(o, "child", ""), J.Json.get_nat(o, "depth", 0n), J.Json.get_str(o, "provider", ""), J.Json.get_str(o, "model", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 17n:
+    case "TaskStateSet":
       Some{M.TaskStateSet{J.Json.get_str(o, "task", ""), TaskSt.of(J.Json.get_str(o, "state", "")), J.Json.get_str(o, "summary", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 18n:
+    case "TaskDelivered":
       Some{M.TaskDelivered{J.Json.get_str(o, "task", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 19n:
+    case "SettingSet":
       Some{M.SettingSet{J.Json.get_str(o, "key", ""), J.Json.get_str(o, "value", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 20n:
+    case "TurnQueued":
       Some{M.TurnQueued{J.Json.get_str(o, "thread", ""), J.Json.get_str(o, "msg", ""), J.Json.get_str(o, "text", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 21n:
+    case "QueueTaken":
       Some{M.QueueTaken{J.Json.get_str(o, "thread", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 22n:
+    case "AskOpened":
       Some{M.AskOpened{J.Json.get_str(o, "id", ""), J.Json.get_str(o, "thread", ""), J.Json.get_str(o, "kind", ""), J.Json.get_str(o, "tool", ""), J.Json.get_str(o, "detail", ""), J.Json.get_str(o, "options", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 23n:
+    case "AskClosed":
       Some{M.AskClosed{J.Json.get_str(o, "id", ""), J.Json.get_str(o, "answer", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 24n:
+    case "DeviceRegistered":
       Some{M.DeviceRegistered{J.Json.get_str(o, "token", ""), J.Json.get_str(o, "platform", ""), J.Json.get_str(o, "kind", ""), J.Json.get_str(o, "thread", ""), J.Json.get_str(o, "env", ""), J.Json.get_str(o, "bundle", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 25n:
+    case "DeviceDropped":
       Some{M.DeviceDropped{J.Json.get_str(o, "token", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 26n:
+    case "ThreadSnoozed":
       Some{M.ThreadSnoozed{J.Json.get_str(o, "id", ""), J.Json.get_nat(o, "until", 0n), J.Json.get_nat(o, "at", 0n)}}
-    case 27n:
+    case "ThreadOrdered":
       Some{M.ThreadOrdered{J.Json.get_str(o, "id", ""), J.Json.get_str(o, "section", ""), J.Json.get_str(o, "key", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 28n:
+    case "WorktreeSkipped":
       Some{M.WorktreeSkipped{J.Json.get_str(o, "id", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 29n:
+    case "ThreadMerged":
       Some{M.ThreadMerged{J.Json.get_str(o, "id", ""), J.Json.get_str(o, "url", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 30n:
+    case "WorktreeRemoved":
       Some{M.WorktreeRemoved{J.Json.get_str(o, "id", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 31n:
+    case "ProjectOrdered":
       Some{M.ProjectOrdered{J.Json.get_str(o, "id", ""), J.Json.get_str(o, "key", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 32n:
+    case "QueueEdited":
       Some{M.QueueEdited{J.Json.get_str(o, "thread", ""), J.Json.get_str(o, "msg", ""), J.Json.get_str(o, "text", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 33n:
+    case "QueueRemoved":
       Some{M.QueueRemoved{J.Json.get_str(o, "thread", ""), J.Json.get_str(o, "msg", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 34n:
+    case "QueueMoved":
       Some{M.QueueMoved{J.Json.get_str(o, "thread", ""), J.Json.get_str(o, "msg", ""), J.Json.get_nat(o, "to", 0n), J.Json.get_nat(o, "at", 0n)}}
-    case 35n:
+    case "QueueTakenOne":
       Some{M.QueueTakenOne{J.Json.get_str(o, "thread", ""), J.Json.get_str(o, "msg", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 36n:
+    case "ThreadForked":
       Some{M.ThreadForked{J.Json.get_str(o, "id", ""), J.Json.get_str(o, "source", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 37n:
+    case "ProviderSet":
       Some{M.ProviderSet{J.Json.get_str(o, "id", ""), J.Json.get_str(o, "provider", ""), J.Json.get_str(o, "model", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 38n:
+    case "TodosSet":
       Some{M.TodosSet{J.Json.get_str(o, "thread", ""), J.Json.get_str(o, "todos", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 39n:
+    case "UsageSet":
       Some{M.UsageSet{J.Json.get_str(o, "thread", ""), J.Json.get_nat(o, "used", 0n), J.Json.get_nat(o, "window", 0n), J.Json.get_nat(o, "at", 0n)}}
-    case 40n:
+    case "BotSet":
       Some{M.BotSet{J.Json.get_str(o, "id", ""), J.Json.get_str(o, "name", ""), J.Json.get_str(o, "thread", ""), J.Json.get_nat(o, "look", 0n), J.Json.get_str(o, "persona", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 41n:
+    case "BotDeleted":
       Some{M.BotDeleted{J.Json.get_str(o, "id", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 42n:
+    case "RoomSet":
       Some{M.RoomSet{J.Json.get_str(o, "id", ""), J.Json.get_str(o, "name", ""), J.Json.get_str(o, "members", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 43n:
+    case "RoomDeleted":
       Some{M.RoomDeleted{J.Json.get_str(o, "id", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 44n:
+    case "RoomPosted":
       Some{M.RoomPosted{J.Json.get_str(o, "id", ""), J.Json.get_str(o, "room", ""), J.Json.get_str(o, "from", ""), J.Json.get_str(o, "text", ""), J.Json.get_nat(o, "hop", 0n), J.Json.get_nat(o, "at", 0n)}}
-    case 45n:
+    case "HookSet":
       Some{M.HookSet{J.Json.get_str(o, "id", ""), J.Json.get_str(o, "bot", ""), J.Json.get_str(o, "name", ""), J.Json.get_bool(o, "revoked", False{}), J.Json.get_nat(o, "at", 0n)}}
-    case 46n:
+    case "HookHit":
       Some{M.HookHit{J.Json.get_str(o, "id", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 47n:
+    case "RoutineSet":
       Some{M.RoutineSet{J.Json.get_str(o, "id", ""), J.Json.get_str(o, "bot", ""), J.Json.get_str(o, "name", ""), J.Json.get_str(o, "cron", ""), J.Json.get_str(o, "prompt", ""), J.Json.get_bool(o, "on", False{}), J.Json.get_nat(o, "at", 0n)}}
-    case 48n:
+    case "RoutineDeleted":
       Some{M.RoutineDeleted{J.Json.get_str(o, "id", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 49n:
+    case "RoutineFired":
       Some{M.RoutineFired{J.Json.get_str(o, "id", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 50n:
+    case "MemorySaved":
       Some{M.MemorySaved{J.Json.get_str(o, "bot", ""), J.Json.get_str(o, "key", ""), J.Json.get_str(o, "kind", ""), J.Json.get_str(o, "text", ""), J.Json.get_str(o, "tags", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 51n:
+    case "MemoryForgot":
       Some{M.MemoryForgot{J.Json.get_str(o, "bot", ""), J.Json.get_str(o, "key", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 52n:
+    case "SpaceSet":
       Some{M.SpaceSet{J.Json.get_str(o, "bot", ""), J.Json.get_str(o, "spec", ""), J.Json.get_nat(o, "at", 0n)}}
-    case 53n:
+    case "PeerSet":
       Some{M.PeerSet{J.Json.get_str(o, "id", ""), J.Json.get_str(o, "name", ""), J.Json.get_str(o, "url", ""), J.Json.get_bool(o, "revoked", False{}), J.Json.get_nat(o, "at", 0n)}}
-    case 54n:
+    case "BotWoke":
       Some{M.BotWoke{J.Json.get_str(o, "bot", ""), J.Json.get_nat(o, "hop", 0n), J.Json.get_nat(o, "at", 0n)}}
-    case 55n:
+    case "SpacePageSet":
       Some{M.SpacePageSet{J.Json.get_str(o, "bot", ""), J.Json.get_str(o, "html", ""), J.Json.get_nat(o, "at", 0n)}}
     case _:
       None{}
 
 # a Change from its JSON, or None for an unknown tag
 def Change.decode(+o: J.Json) -> Maybe<&2, M.Change>:
-  Change.decode.k(Codec.pos(Change.tags(), J.Json.get_str(o, "$", "")), o)
+  Change.decode.k(J.Json.get_str(o, "$", ""), o)
 
 # What clients see
 # ----------------

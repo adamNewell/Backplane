@@ -21,9 +21,9 @@ import ./apikeys.bend as AK
 
 # The client state, Elm-style, shared by the native window and the web
 # page: a host feeds server messages to Ui.recv and user actions to Ui.act,
-# then draws the result. The read model is folded by the same State.apply
-# the server uses (law replay_snoc), so what a client shows is exactly what
-# the server stored.
+# then draws the result. Clients fold the same events and entry indexes
+# as the hub. They prepare each design history when its thread is shown;
+# the hub keeps the complete design projection for native adoption.
 
 type Ui is Data:
   Ui{
@@ -179,7 +179,30 @@ def Ui.fold(cs: List<&2, M.Change>, u: Ui) -> Ui:
     case Nil{} _:
       u
     case +c <> t Ui{st, sel, dr, live, op, on, now, ad, pa, v, rid, w, er, note, nf, ob, tr}:
-      Ui.fold(t, Ui.see(Ui{M.State.apply(st, c), sel, dr, live, op, on, now, ad, pa, v, rid, w, er, note, nf, ob, tr}, c))
+      Ui.fold(t, Ui.see(Ui{M.State.apply_client(st, c), sel, dr, live, op, on, now, ad, pa, v, rid, w, er, note, nf, ob, tr}, c))
+
+# Apply decoded events directly. Do not build and reverse an intermediate
+# Change list during a full restore or an incremental update.
+def Ui.ingest.one(u: Ui, m: Maybe<&2, M.Change>) -> Ui:
+  match u m:
+    case Ui{st, sel, dr, live, op, on, now, ad, pa, v, rid, w, er, note, nf, ob, tr} Some{+c}:
+      Ui.see(Ui{M.State.apply_client(st, c), sel, dr, live, op, on, now, ad, pa, v, rid, w, er, note, nf, ob, tr}, c)
+    case _ None{}:
+      u
+
+def Ui.ingest.items(xs: J.Json, u: Ui) -> Ui:
+  match xs:
+    case J.Item{x, t}:
+      Ui.ingest.items(t, Ui.ingest.one(u, C.Change.decode(x)))
+    case _:
+      u
+
+def Ui.ingest(xs: J.Json, u: Ui) -> Ui:
+  match xs:
+    case J.Arr{items}:
+      Ui.ingest.items(items, u)
+    case _:
+      u
 
 def Info.fields(fs: J.Json, m: Map<&2, String>) -> Map<&2, String>:
   match fs:
@@ -297,12 +320,23 @@ def Ui.base(resume: Bool, st: M.State) -> M.State:
 # the server's log on (re)connect: from nothing, or, when it says `since`
 # (the client already has that many changes), just what was missed; the
 # client's id survives the machine info being replaced
+# A resumed log updates hub metadata without removing client choices made
+# while the cached history was on screen. A new log starts its info anew.
+def Info.resume(resume: Bool, o: J.Json, old: Map<&2, String>) -> Map<&2, String>:
+  match resume o:
+    case True{} J.Obj{fs}:
+      Info.fields(fs, old)
+    case True{} _:
+      old
+    case False{} +o:
+      Info.of(o)
+
 def Ui.reset(u: Ui, +o: J.Json) -> Ui:
   match u:
     case Ui{st, sel, dr, live, op, _, now, ad, pa, _, rid, w, er, note, +nf, ob, tr}:
-      Ui.fold(Ui.decode(J.Json.elems(J.Json.get_obj(o, "items"))),
+      Ui.ingest(J.Json.get_obj(o, "items"),
         Ui{Ui.base(Nat.is_gt(J.Json.get_nat(o, "since", 0n), 0n), st), sel, dr, live, op, True{}, now, ad, pa, J.Json.get_str(o, "version", ""), rid, w, er, note,
-          Machines.home(Local.keep(nf, Map.set(&2, String, Map.set(&2, String, Info.of(J.Json.get_obj(o, "info")), "cid", Str.get(nf, "cid")), "origin", J.Json.get_str(o, "origin", "")))), ob, tr})
+          Machines.home(Local.keep(nf, Map.set(&2, String, Map.set(&2, String, Info.resume(Nat.is_gt(J.Json.get_nat(o, "since", 0n), 0n), J.Json.get_obj(o, "info"), nf), "cid", Str.get(nf, "cid")), "origin", J.Json.get_str(o, "origin", "")))), ob, tr})
 
 # how many changes this client holds (a reconnect asks for the rest)
 # the log's read model handed over whole (the hub's own window: nothing
@@ -883,6 +917,16 @@ def Ui.sel(u: Ui) -> String:
   match u:
     case Ui{_, sel, _, _, _, _, _, _, _, _, _, _, _, _, nf, ob, tr}:
       sel
+
+def Ui.prepare_history(u: Ui) -> Ui:
+  match u:
+    case Ui{st, +sel, dr, live, op, on, now, ad, pa, v, rid, w, er, note, nf, ob, tr}:
+      Ui{M.State.prepare_design(st, sel), sel, dr, live, op, on, now, ad, pa, v, rid, w, er, note, nf, ob, tr}
+
+def Act.prepare_history(a: Act) -> Act:
+  match a:
+    case Act{u, cs}:
+      Act{Ui.prepare_history(u), cs}
 
 # the panel after the selection may have moved on from thread `old`
 def Ui.reselect(+old: String, +u: Ui) -> Ui:
@@ -4573,14 +4617,14 @@ def Hs.set(+u: Ui, +k: String, +v: String) -> Ui:
   Ui.info_set(u, k ++ ":" ++ Ui.sel(u), v)
 
 # the steps that changed the kind of file on show, oldest first
-def Hs.track(+u: Ui) -> List<&2, HI.Step>:
-  HI.Hist.track(HI.Hist.steps(Ui.state(u), Ui.sel(u)), Hs.kind(u))
+def Hs.track(+u: Ui) -> List<&2, M.DesignRecord>:
+  List.reverse(&2, M.DesignRecord, M.State.design(Ui.state(u), M.DesignRecord.kind_key(Ui.sel(u), Hs.kind(u))))
 
 def Hs.path(+u: Ui) -> String:
   Ui.view_get(u, "view.path")
 
 # the position on show (1 the first step), 0 while the live file shows
-def Hs.at(+u: Ui, +ss: List<&2, HI.Step>) -> Nat:
+def Hs.at(+u: Ui, +ss: List<&2, M.DesignRecord>) -> Nat:
   Bool.pick(Nat, Nat.is_eq(HI.Hist.kind(Hs.path(u)), 0n), 0n, HI.Hist.index(ss, Hs.get(u, "hist.at")))
 
 def Hs.diff(+u: Ui) -> Bool:
@@ -4607,7 +4651,7 @@ def Hs.clear.cmp(u: Ui) -> Ui:
   Hs.set(Hs.set(Hs.set(Hs.set(u, "cmp.a", ""), "cmp.b", ""), "cmp.al", ""), "cmp.bl", "")
 
 # show a step (as it was, or compared with the one before)
-def Hs.show(+u: Ui, +s: HI.Step, +k: Nat) -> Ui:
+def Hs.show(+u: Ui, +s: M.DesignRecord, +k: Nat) -> Ui:
   Ui.view_put(Hs.set(Hs.clear.cmp(Hs.keep.live(u)), "hist.at", HI.Step.id(s)), Hs.kname(k),
     HI.Step.spec(s, k, HI.Hist.family(Hs.path(u)), Hs.diff(u)))
 
@@ -4621,7 +4665,7 @@ def Hs.live(+u: Ui) -> Ui:
   Ui.view_put(Hs.clear.cmp(Hs.set(Hs.set(Hs.set(u, "hist.at", ""), "hist.play", ""), "hist.back", "")), Hs.kname(Hs.kind(u)),
     Bool.pick(String, Nat.is_eq(HI.Hist.kind(Hs.path(u)), 0n), Hs.path(u), Hs.back(u)))
 
-def Hs.go.k(m: Maybe<&2, HI.Step>, +u: Ui) -> Ui:
+def Hs.go.k(m: Maybe<&2, M.DesignRecord>, +u: Ui) -> Ui:
   match m:
     case Some{+s}:
       Hs.show(u, s, Hs.kind(u))
@@ -4629,11 +4673,11 @@ def Hs.go.k(m: Maybe<&2, HI.Step>, +u: Ui) -> Ui:
       Hs.live(u)
 
 # go to position i of the track (0, or past its end: the live file)
-def Hs.go(+u: Ui, +ss: List<&2, HI.Step>, +i: Nat) -> Ui:
+def Hs.go(+u: Ui, +ss: List<&2, M.DesignRecord>, +i: Nat) -> Ui:
   Hs.go.k(HI.Hist.nth(ss, i), u)
 
-def Hs.n(+ss: List<&2, HI.Step>) -> Nat:
-  List.length(&2, HI.Step, ss)
+def Hs.n(+ss: List<&2, M.DesignRecord>) -> Nat:
+  List.length(&2, M.DesignRecord, ss)
 
 def Hs.step(fwd: Bool, +u: Ui) -> Ui:
   match fwd:
@@ -4655,7 +4699,7 @@ def Hs.tick(+u: Ui, +token: String) -> Cmd:
 def Hs.num(s: String) -> Nat:
   M.Switch.num(s, 0n)
 
-def Hs.play.start(+u: Ui, +ss: List<&2, HI.Step>) -> Act:
+def Hs.play.start(+u: Ui, +ss: List<&2, M.DesignRecord>) -> Act:
   +token = Nat.show(1n+Hs.num(Ui.info(u, "hist.gen")))
   +at = Hs.at(u, ss)
   +u2 = Hs.set(Ui.info_set(u, "hist.gen", token), "hist.play", token)
@@ -4671,7 +4715,7 @@ def Hs.play.k(on: Bool, +u: Ui) -> Act:
 def Hs.play(+u: Ui) -> Act:
   Hs.play.k(Hs.playing(u), u)
 
-def Hs.tick.go(last: Bool, +u: Ui, +ss: List<&2, HI.Step>, +at: Nat, +token: String) -> Act:
+def Hs.tick.go(last: Bool, +u: Ui, +ss: List<&2, M.DesignRecord>, +at: Nat, +token: String) -> Act:
   match last:
     case True{}:
       Act{Hs.set(u, "hist.play", ""), Nil{}}
@@ -4730,7 +4774,7 @@ def Hs.pages(+u: Ui, +th: String, +p: Nat) -> Ui:
 def Hs.jump.to(+u: Ui, +es: List<&2, M.Entry>, +id: String) -> Act:
   Act{Ui.info_set(Hs.pages(Hs.opens(FO.Fold.reveal(List.reverse(&2, M.Entry, es), id), Hs.set(u, "hist.play", "")), Ui.sel(u), Hs.pos(es, id, 0n)), "hist.jump", id), [Jump{id}]}
 
-def Hs.anchor.k(m: Maybe<&2, HI.Step>, +es: List<&2, M.Entry>) -> String:
+def Hs.anchor.k(m: Maybe<&2, M.DesignRecord>, +es: List<&2, M.Entry>) -> String:
   match m:
     case Some{+s}:
       HI.Hist.anchor(es, s)
@@ -4756,22 +4800,22 @@ def Hs.jump(+u: Ui, +value: String) -> Act:
 
 # A step's row in the thread shows it: its board, else its schematic (the
 # kind on show when the step changed one)
-def Hs.show.kind(+s: HI.Step, +k: Nat) -> Nat:
+def Hs.show.kind(+s: M.DesignRecord, +k: Nat) -> Nat:
   Bool.pick(Nat, Bool.and(Nat.is_lt(k, 2n), HI.Step.has(s, k)), k, Bool.pick(Nat, HI.Step.has(s, 0n), 0n, 1n))
 
-def Hs.show.at(m: Maybe<&2, HI.Step>, +u: Ui) -> Ui:
+def Hs.show.at(m: Maybe<&2, M.DesignRecord>, +u: Ui) -> Ui:
   match m:
     case Some{+s}:
       Hs.show(Ui.view_put(u, Hs.kname(Hs.show.kind(s, Hs.kind(u))), Bool.pick(String, Nat.is_eq(HI.Hist.kind(Hs.path(u)), 0n), Hs.path(u), Hs.get(u, "hist.back"))), s, Hs.show.kind(s, Hs.kind(u)))
     case None{}:
       u
 
-def Hs.find(ss: List<&2, HI.Step>, +id: String) -> Maybe<&2, HI.Step>:
+def Hs.find(ss: List<&2, M.DesignRecord>, +id: String) -> Maybe<&2, M.DesignRecord>:
   match ss:
     case Nil{}:
       None{}
     case +s <> t:
-      Bool.pick(Maybe<&2, HI.Step>, String.eq(HI.Step.id(s), id), Some{s}, Hs.find(t, id))
+      Bool.pick(Maybe<&2, M.DesignRecord>, String.eq(HI.Step.id(s), id), Some{s}, Hs.find(t, id))
 
 def Hs.show.id(+u: Ui, +id: String) -> Ui:
   Hs.show.at(Hs.find(HI.Hist.steps(Ui.state(u), Ui.sel(u)), id), Hs.keep.live(u))
@@ -4792,12 +4836,12 @@ def Hs.refs(+u: Ui) -> J.Json:
 def Hs.row.value(+side: String, +commit: String, +label: String, +git: String, +top: String) -> String:
   side ++ "\t" ++ commit ++ "\t" ++ label ++ "\t" ++ git ++ "\t" ++ top
 
-def Hs.row.steps(ss: List<&2, HI.Step>, +side: String, +es: List<&2, M.Entry>, +i: Nat, acc: List<&2, HRow>) -> List<&2, HRow>:
+def Hs.row.steps(ss: List<&2, M.DesignRecord>, +side: String, +es: List<&2, M.Entry>, +i: Nat, acc: List<&2, HRow>) -> List<&2, HRow>:
   match ss:
     case Nil{}:
       acc
-    case HI.Step{+id, _, +c, _, +g, +top, _, _} <> t:
-      Hs.row.steps(t, side, es, 1n+i, HRow{"Step " ++ Nat.show(i), HI.Hist.label(es, HI.Hist.anchor(es, HI.Step{id, "", c, "", g, top, Nil{}, 0n})), Hs.row.value(side, c, "Step " ++ Nat.show(i), g, top)} <> acc)
+    case M.DesignRecord{+id, _, +c, _, +g, +top, _, _} <> t:
+      Hs.row.steps(t, side, es, 1n+i, HRow{"Step " ++ Nat.show(i), HI.Hist.label(es, HI.Hist.anchor(es, M.DesignRecord{id, "", c, "", g, top, Nil{}, 0n})), Hs.row.value(side, c, "Step " ++ Nat.show(i), g, top)} <> acc)
 
 def Hs.ref.label(+r: HI.Ref) -> String:
   match r:
@@ -4920,7 +4964,7 @@ type HBar is Data:
 def Hs.said.line(+s: String) -> String:
   HI.Hist.line(s)
 
-def Hs.bar.k(m: Maybe<&2, HI.Step>, +u: Ui, +n: Nat, +at: Nat, +es: List<&2, M.Entry>) -> HBar:
+def Hs.bar.k(m: Maybe<&2, M.DesignRecord>, +u: Ui, +n: Nat, +at: Nat, +es: List<&2, M.Entry>) -> HBar:
   match m:
     case Some{+s}:
       HBar{True{}, n, at, "Step " ++ Nat.show(at) ++ " of " ++ Nat.show(n) ++ Bool.pick(String, HI.Step.first(s), " · before the agent's edits", ""),
@@ -4953,7 +4997,9 @@ def Hs.fade() -> Nat:
 def Hs.bar.on(on: Bool, +u: Ui) -> HBar:
   match on:
     case True{}:
-      Hs.bar.k(HI.Hist.nth(Hs.track(u), Hs.at(u, Hs.track(u))), u, Hs.n(Hs.track(u)), Hs.at(u, Hs.track(u)), M.State.mine(Ui.state(u), Ui.sel(u)))
+      +ss = Hs.track(u)
+      +at = Hs.at(u, ss)
+      Hs.bar.k(HI.Hist.nth(ss, at), u, Hs.n(ss), at, M.State.mine(Ui.state(u), Ui.sel(u)))
     case False{}:
       HBar{False{}, 0n, 0n, "", "", "", "", False{}, False{}, False{}, "", "", ""}
 
@@ -5262,7 +5308,7 @@ def Ui.recv.k(i: Nat, u: Ui, +o: J.Json) -> Ui:
     case 0n:
       Ui.reset(u, o)
     case 1n:
-      Ui.fold(Ui.decode(J.Json.elems(J.Json.get_obj(o, "items"))), u)
+      Ui.ingest(J.Json.get_obj(o, "items"), u)
     case 2n:
       Ui.delta(u, J.Json.get_str(o, "thread", ""), J.Json.get_str(o, "text", ""))
     case 3n:
@@ -5513,7 +5559,7 @@ def Ui.recv_act.n(notify: Bool, u: Ui, +o: J.Json) -> Act:
       Mpage.sync(Ui.recv_act.go(u, o))
 
 def Ui.recv_act(u: Ui, +o: J.Json) -> Act:
-  Ui.recv_act.n(String.eq(J.Json.get_str(o, "t", ""), "notify"), u, o)
+  Act.prepare_history(Ui.recv_act.n(String.eq(J.Json.get_str(o, "t", ""), "notify"), u, o))
 
 # Desks
 # -----
@@ -5821,7 +5867,7 @@ def Ui.act.m(menu: Bool, +i: Nat, +u: Ui, +action: String, +value: String) -> Ac
       Menu.after(action, Ui.reselect.act(Ui.sel(u), Ui.act.k(C.Codec.pos(Ui.actions(), action), u, value)))
 
 def Ui.act(+u: Ui, +action: String, +value: String) -> Act:
-  Mpage.sync(Ui.act.m(Nat.is_lt(C.Codec.pos(Menu.actions(), action), 13n), C.Codec.pos(Menu.actions(), action), u, action, value))
+  Act.prepare_history(Mpage.sync(Ui.act.m(Nat.is_lt(C.Codec.pos(Menu.actions(), action), 13n), C.Codec.pos(Menu.actions(), action), Ui.prepare_history(u), action, value)))
 
 # the newest n of a list (oldest first), and how many are left out
 type Win is Data:

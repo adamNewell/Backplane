@@ -138,58 +138,37 @@ def Hist.ext(+path: String) -> Nat:
 # Steps
 # -----
 
-# a file a step touched: A added, M modified, D deleted; rel from the top
-type SFile is Data:
-  SFile{st: String, rel: String}
-
-# id: its Act's; entry: the tool call (or message) it followed, "" when
-# the turn's end took it; prev: the step before ("" for the first)
-type Step is Data:
-  Step{id: String, entry: String, commit: String, prev: String, git: String, top: String, files: List<&2, SFile>, at: Nat}
-
 def Step.tone() -> String:
   "step"
 
-def SFile.of(+l: String) -> SFile:
-  SFile{Hist.at(String.split(l, '\t'), 0n), Hist.at(String.split(l, '\t'), 1n)}
-
-def SFile.line(f: SFile) -> String:
+def SFile.line(f: M.DesignFile) -> String:
   match f:
-    case SFile{+st, +rel}:
+    case M.DesignFile{+st, +rel}:
       st ++ "\t" ++ rel
 
-def SFile.lines(fs: List<&2, SFile>) -> List<&2, J.Json>:
+def SFile.lines(fs: List<&2, M.DesignFile>) -> List<&2, J.Json>:
   match fs:
     case Nil{}:
       Nil{}
     case f <> t:
       J.Str{SFile.line(f)} <> SFile.lines(t)
 
-def SFile.keep(blank: Bool, +x: String, rest: List<&2, SFile>) -> List<&2, SFile>:
+def SFile.keep(blank: Bool, +x: String, rest: List<&2, M.DesignFile>) -> List<&2, M.DesignFile>:
   match blank:
     case True{}:
       rest
     case False{}:
-      SFile.of(x) <> rest
+      M.DesignFile.of(x) <> rest
 
-def SFile.parse(xs: List<&2, String>) -> List<&2, SFile>:
+def SFile.parse(xs: List<&2, String>) -> List<&2, M.DesignFile>:
   match xs:
     case Nil{}:
       Nil{}
     case +x <> t:
       SFile.keep(String.is_empty(String.trim(x)), x, SFile.parse(t))
 
-def SFile.strs(xs: List<&2, J.Json>) -> List<&2, SFile>:
-  match xs:
-    case Nil{}:
-      Nil{}
-    case J.Str{+x} <> t:
-      SFile.of(x) <> SFile.strs(t)
-    case _ <> t:
-      SFile.strs(t)
-
 # git's -z output: status, path, status, path... (a NUL after each)
-def SFile.pairs(xs: List<&2, String>) -> List<&2, SFile>:
+def SFile.pairs(xs: List<&2, String>) -> List<&2, M.DesignFile>:
   match xs:
     case +st <> +p <> t:
       SFile.keep(Bool.or(String.is_empty(st), String.is_empty(p)), st ++ "\t" ++ p, SFile.pairs(t))
@@ -208,18 +187,14 @@ def Hist.record.k(+ls: List<&2, String>, +entry: String) -> String:
 def Hist.record(+out: String, +entry: String) -> String:
   Hist.record.k(String.split(out, '\n'), entry)
 
-def Step.read(+id: String, +at: Nat, +o: J.Json) -> Step:
-  Step{id, J.Json.get_str(o, "e", ""), J.Json.get_str(o, "c", ""), J.Json.get_str(o, "p", ""), J.Json.get_str(o, "g", ""), J.Json.get_str(o, "t", ""),
-    SFile.strs(J.Json.elems(J.Json.get_obj(o, "f"))), at}
-
-def Step.parsed(m: Maybe<&2, J.Json>, +id: String, +at: Nat) -> Maybe<&2, Step>:
+def Step.parsed(m: Maybe<&2, J.Json>, +id: String, +at: Nat) -> Maybe<&2, M.DesignRecord>:
   match m:
     case Some{+o}:
-      Some{Step.read(id, at, o)}
+      Some{M.DesignRecord.read(id, at, o)}
     case None{}:
       None{}
 
-def Step.of.k(step: Bool, +id: String, +summary: String, +at: Nat) -> Maybe<&2, Step>:
+def Step.of.k(step: Bool, +id: String, +summary: String, +at: Nat) -> Maybe<&2, M.DesignRecord>:
   match step:
     case True{}:
       Step.parsed(J.Json.parse(summary), id, at)
@@ -227,7 +202,7 @@ def Step.of.k(step: Bool, +id: String, +summary: String, +at: Nat) -> Maybe<&2, 
       None{}
 
 # a step's Act read back (None for any other entry)
-def Step.of(e: M.Entry) -> Maybe<&2, Step>:
+def Step.of(e: M.Entry) -> Maybe<&2, M.DesignRecord>:
   match e:
     case M.Act{+id, _, +tone, _, +summary, +at}:
       Step.of.k(String.eq(tone, Step.tone()), id, summary, at)
@@ -241,58 +216,58 @@ def Step.is(e: M.Entry) -> Bool:
     case M.Msg{_, _, _, _, _}:
       False{}
 
-def Step.put(m: Maybe<&2, Step>, acc: List<&2, Step>) -> List<&2, Step>:
+def Step.put(m: Maybe<&2, M.DesignRecord>, acc: List<&2, M.DesignRecord>) -> List<&2, M.DesignRecord>:
   match m:
     case Some{s}:
       s <> acc
     case None{}:
       acc
 
-def Step.all(es: List<&2, M.Entry>, acc: List<&2, Step>) -> List<&2, Step>:
+def Step.all(es: List<&2, M.Entry>, acc: List<&2, M.DesignRecord>) -> List<&2, M.DesignRecord>:
   match es:
     case Nil{}:
       acc
     case e <> t:
       Step.all(t, Step.put(Step.of(e), acc))
 
-# a thread's steps, oldest first
-def Hist.steps(+s: M.State, +th: String) -> List<&2, Step>:
-  Step.all(M.State.steps(s, th), Nil{})
+# a thread's parsed records, oldest first
+def Hist.steps(+s: M.State, +th: String) -> List<&2, M.DesignRecord>:
+  List.reverse(&2, M.DesignRecord, M.State.design(s, th))
 
-def Step.id(s: Step) -> String:
+def Step.id(s: M.DesignRecord) -> String:
   match s:
-    case Step{i, _, _, _, _, _, _, _}:
+    case M.DesignRecord{i, _, _, _, _, _, _, _}:
       i
 
-def Step.entry(s: Step) -> String:
+def Step.entry(s: M.DesignRecord) -> String:
   match s:
-    case Step{_, e, _, _, _, _, _, _}:
+    case M.DesignRecord{_, e, _, _, _, _, _, _}:
       e
 
-def Step.files(s: Step) -> List<&2, SFile>:
+def Step.files(s: M.DesignRecord) -> List<&2, M.DesignFile>:
   match s:
-    case Step{_, _, _, _, _, _, fs, _}:
+    case M.DesignRecord{_, _, _, _, _, _, fs, _}:
       fs
 
-def Step.first(s: Step) -> Bool:
+def Step.first(s: M.DesignRecord) -> Bool:
   match s:
-    case Step{_, _, _, +p, _, _, _, _}:
+    case M.DesignRecord{_, _, _, +p, _, _, _, _}:
       String.is_empty(p)
 
-def SFile.rel(f: SFile) -> String:
+def SFile.rel(f: M.DesignFile) -> String:
   match f:
-    case SFile{_, r}:
+    case M.DesignFile{_, r}:
       r
 
-def SFile.gone(f: SFile) -> Bool:
+def SFile.gone(f: M.DesignFile) -> Bool:
   match f:
-    case SFile{+st, _}:
+    case M.DesignFile{+st, _}:
       String.eq(st, "D")
 
-def SFile.of_kind(+f: SFile, +kind: Nat) -> Bool:
+def SFile.of_kind(+f: M.DesignFile, +kind: Nat) -> Bool:
   Bool.and(Nat.is_eq(Hist.ext(SFile.rel(f)), kind), Bool.not(SFile.gone(f)))
 
-def SFile.any(fs: List<&2, SFile>, +kind: Nat) -> Bool:
+def SFile.any(fs: List<&2, M.DesignFile>, +kind: Nat) -> Bool:
   match fs:
     case Nil{}:
       False{}
@@ -300,10 +275,10 @@ def SFile.any(fs: List<&2, SFile>, +kind: Nat) -> Bool:
       Bool.or(SFile.of_kind(f, kind), SFile.any(t, kind))
 
 # whether a step changed a file of the kind (a deletion shows nothing)
-def Step.has(+s: Step, +kind: Nat) -> Bool:
+def Step.has(+s: M.DesignRecord, +kind: Nat) -> Bool:
   SFile.any(Step.files(s), kind)
 
-def Hist.track.k(has: Bool, s: Step, rest: List<&2, Step>) -> List<&2, Step>:
+def Hist.track.k(has: Bool, s: M.DesignRecord, rest: List<&2, M.DesignRecord>) -> List<&2, M.DesignRecord>:
   match has:
     case True{}:
       s <> rest
@@ -311,19 +286,19 @@ def Hist.track.k(has: Bool, s: Step, rest: List<&2, Step>) -> List<&2, Step>:
       rest
 
 # the steps that changed a board (kind 0) or a schematic (1), oldest first
-def Hist.track(ss: List<&2, Step>, +kind: Nat) -> List<&2, Step>:
+def Hist.track(ss: List<&2, M.DesignRecord>, +kind: Nat) -> List<&2, M.DesignRecord>:
   match ss:
     case Nil{}:
       Nil{}
     case +s <> t:
       Hist.track.k(Step.has(s, kind), s, Hist.track(t, kind))
 
-def Step.abs(+s: Step, +rel: String) -> String:
+def Step.abs(+s: M.DesignRecord, +rel: String) -> String:
   match s:
-    case Step{_, _, _, _, _, top, _, _}:
+    case M.DesignRecord{_, _, _, _, _, top, _, _}:
       top ++ "/" ++ rel
 
-def SFile.pick.go(fs: List<&2, SFile>, +kind: Nat, +want: String, +top: String, +first: String) -> String:
+def SFile.pick.go(fs: List<&2, M.DesignFile>, +kind: Nat, +want: String, +top: String, +first: String) -> String:
   match fs:
     case Nil{}:
       first
@@ -333,36 +308,36 @@ def SFile.pick.go(fs: List<&2, SFile>, +kind: Nat, +want: String, +top: String, 
 
 # the file of the kind a step shows: the one on show (want, its live
 # path) when the step changed it, else the first it changed
-def Step.file(+s: Step, +kind: Nat, +want: String) -> String:
+def Step.file(+s: M.DesignRecord, +kind: Nat, +want: String) -> String:
   match s:
-    case Step{_, _, _, _, _, +top, fs, _}:
+    case M.DesignRecord{_, _, _, _, _, +top, fs, _}:
       SFile.pick.go(fs, kind, want, top, "")
 
-def Step.spec.at(+s: Step, +c: String, +rel: String) -> String:
+def Step.spec.at(+s: M.DesignRecord, +c: String, +rel: String) -> String:
   match s:
-    case Step{_, _, _, _, +g, +top, _, _}:
+    case M.DesignRecord{_, _, _, _, +g, +top, _, _}:
       Bool.pick(String, String.is_empty(c), "", Hist.git(g, c, top, rel))
 
-def Step.commit(s: Step) -> String:
+def Step.commit(s: M.DesignRecord) -> String:
   match s:
-    case Step{_, _, c, _, _, _, _, _}:
+    case M.DesignRecord{_, _, c, _, _, _, _, _}:
       c
 
-def Step.prev(s: Step) -> String:
+def Step.prev(s: M.DesignRecord) -> String:
   match s:
-    case Step{_, _, _, p, _, _, _, _}:
+    case M.DesignRecord{_, _, _, p, _, _, _, _}:
       p
 
 # the viewer's path for a step: the file as the step left it, or (diff)
 # compared with the step before (a file the step made compares with none)
-def Step.spec.k(diff: Bool, +s: Step, +rel: String) -> String:
+def Step.spec.k(diff: Bool, +s: M.DesignRecord, +rel: String) -> String:
   match diff:
     case True{}:
       Hist.diff(Step.spec.at(s, Step.prev(s), rel), Step.spec.at(s, Step.commit(s), rel))
     case False{}:
       Step.spec.at(s, Step.commit(s), rel)
 
-def Step.spec(+s: Step, +kind: Nat, +want: String, diff: Bool) -> String:
+def Step.spec(+s: M.DesignRecord, +kind: Nat, +want: String, diff: Bool) -> String:
   Step.spec.k(diff, s, Step.file(s, kind, want))
 
 # Positions
@@ -424,14 +399,14 @@ def Hist.anchor.find.go(es: List<&2, M.Entry>, hit: Bool, +id: String) -> String
 def Hist.anchor.find(+es: List<&2, M.Entry>, +id: String) -> String:
   Hist.anchor.find.go(es, Hist.at_id(es, id), id)
 
-def Hist.at_sid(ss: List<&2, Step>, +id: String) -> Bool:
+def Hist.at_sid(ss: List<&2, M.DesignRecord>, +id: String) -> Bool:
   match ss:
     case +s <> _:
       String.eq(Step.id(s), id)
     case Nil{}:
       False{}
 
-def Hist.index.go(ss: List<&2, Step>, hit: Bool, +id: String, +i: Nat) -> Nat:
+def Hist.index.go(ss: List<&2, M.DesignRecord>, hit: Bool, +id: String, +i: Nat) -> Nat:
   match ss hit:
     case Nil{} _:
       0n
@@ -440,17 +415,17 @@ def Hist.index.go(ss: List<&2, Step>, hit: Bool, +id: String, +i: Nat) -> Nat:
     case +x <> +t False{}:
       Hist.index.go(t, Hist.at_sid(t, id), id, 1n+i)
 
-def Hist.index(+ss: List<&2, Step>, +id: String) -> Nat:
+def Hist.index(+ss: List<&2, M.DesignRecord>, +id: String) -> Nat:
   Bool.pick(Nat, String.is_empty(id), 0n, Hist.index.go(ss, Hist.at_sid(ss, id), id, 1n))
 
-def Hist.nth(ss: List<&2, Step>, +i: Nat) -> Maybe<&2, Step>:
+def Hist.nth(ss: List<&2, M.DesignRecord>, +i: Nat) -> Maybe<&2, M.DesignRecord>:
   match i:
     case 0n:
       None{}
     case 1n+j:
-      List.head(&2, Step, List.drop(&2, Step, ss, j))
+      List.head(&2, M.DesignRecord, List.drop(&2, M.DesignRecord, ss, j))
 
-def Hist.nth.id(m: Maybe<&2, Step>) -> String:
+def Hist.nth.id(m: Maybe<&2, M.DesignRecord>) -> String:
   match m:
     case Some{s}:
       Step.id(s)
@@ -458,7 +433,7 @@ def Hist.nth.id(m: Maybe<&2, Step>) -> String:
       ""
 
 # the step at position i ("" for live, or past either end)
-def Hist.id_at(+ss: List<&2, Step>, +i: Nat) -> String:
+def Hist.id_at(+ss: List<&2, M.DesignRecord>, +i: Nat) -> String:
   Hist.nth.id(Hist.nth(ss, i))
 
 # Where the arrows go: from live, back is the last step and forward stays
@@ -616,14 +591,14 @@ def Mark.tally(xs: List<&2, B.Item>, +layer: U32) -> Nat:
 def Hist.entry.id(e: M.Entry) -> String:
   M.Idx.id(e)
 
-def Hist.anchor.k(named: Bool, +es: List<&2, M.Entry>, +s: Step) -> String:
+def Hist.anchor.k(named: Bool, +es: List<&2, M.Entry>, +s: M.DesignRecord) -> String:
   match named:
     case True{}:
       Step.entry(s)
     case False{}:
       Hist.anchor.find(es, Step.id(s))
 
-def Hist.anchor(+es: List<&2, M.Entry>, +s: Step) -> String:
+def Hist.anchor(+es: List<&2, M.Entry>, +s: M.DesignRecord) -> String:
   Hist.anchor.k(Bool.not(String.is_empty(Step.entry(s))), es, s)
 
 # an entry in a line: a tool call's name and summary, a message's first line
@@ -732,14 +707,14 @@ def Hist.refs(+text: String) -> List<&2, Ref>:
 def Hist.base(+p: String) -> String:
   Hist.at(List.reverse(&2, String, String.split(p, '/')), 0n)
 
-def SFile.names(fs: List<&2, SFile>) -> List<&2, String>:
+def SFile.names(fs: List<&2, M.DesignFile>) -> List<&2, String>:
   match fs:
     case Nil{}:
       Nil{}
-    case SFile{+st, +rel} <> t:
+    case M.DesignFile{+st, +rel} <> t:
       (Hist.base(rel) ++ Bool.pick(String, String.eq(st, "D"), " (removed)", Bool.pick(String, String.eq(st, "A"), " (new)", ""))) <> SFile.names(t)
 
-def Step.row.k(m: Maybe<&2, Step>) -> String:
+def Step.row.k(m: Maybe<&2, M.DesignRecord>) -> String:
   match m:
     case Some{+s}:
       Bool.pick(String, Step.first(s), "Design before the edits · ", "Design change · ") ++ String.join(SFile.names(Step.files(s)), ", ")

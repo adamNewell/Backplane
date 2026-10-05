@@ -458,12 +458,12 @@ def Fr.entries.go(es: List<&2, M.Entry>, +prefix: String, acc: List<&2, M.Entry>
     case +e <> t:
       Fr.entries.go(t, prefix, Fr.entries.keep(String.starts_with(M.Idx.thread(e), prefix), e, acc))
 
-def Fr.index(es: List<&2, M.Entry>, by: Map<&2, List<&2, M.Entry>>) -> Map<&2, List<&2, M.Entry>>:
+def Fr.index(es: List<&2, M.Entry>, ext: M.Ext) -> M.Ext:
   match es:
     case Nil{}:
-      by
+      ext
     case +e <> t:
-      Fr.index(t, M.Idx.post(by, e))
+      Fr.index(t, M.Ext.post(ext, e))
 
 def Fr.world(w: BT.World, +prefix: String) -> BT.World:
   match w:
@@ -472,7 +472,7 @@ def Fr.world(w: BT.World, +prefix: String) -> BT.World:
         Fr.map(String, sp, prefix), Fr.map(BT.Hops, ho, prefix), Fr.map(Nat, ta, prefix), Fr.map(BT.Page, pg, prefix)}
 
 def Fr.ext(bw: List<&2, M.Ext>, +prefix: String, es: List<&2, M.Entry>) -> List<&2, M.Ext>:
-  [M.Ext{Fr.world(M.Ext.world(M.Ext.of(bw)), prefix), Fr.index(List.reverse(&2, M.Entry, es), Map.new(&2, List<&2, M.Entry>))}]
+  [M.Ext.with_world(w => Fr.world(M.Ext.world(M.Ext.of(bw)), prefix), Fr.index(List.reverse(&2, M.Entry, es), M.Ext.empty()))]
 
 def Fr.forget(s: M.State, +link: String) -> M.State:
   match s:

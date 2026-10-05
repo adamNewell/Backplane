@@ -843,26 +843,27 @@ def View.fold.row(+id: String, +label: String, +open: Bool) -> D.Node:
   WI.WIcon.button("fold", "fold", FO.Fold.ask(open, id), Bool.pick(String, open, "Hide ", "Show ") ++ Bool.pick(String, String.starts_with(id, "work:"), "what the agent did", "these tool calls"),
     Bool.pick(String, open, "chevron-down", "chevron-right"), 14, label)
 
-def View.fold.shown(open: Bool, ns: List<&2, D.Node>) -> List<&2, D.Node>:
+def View.fold.shown(open: Bool, e: M.Entry, st: M.State, sel: String) -> List<&2, D.Node>:
   match open:
     case True{}:
-      ns
+      View.entry(e, st, sel)
     case False{}:
       Nil{}
 
-# an entry's nodes as its role says
-def View.role(r: FO.Role, ns: List<&2, D.Node>) -> List<&2, D.Node>:
+# Check the role before building the entry. JavaScript evaluates arguments
+# eagerly, so passing prebuilt nodes also parses hidden design records.
+def View.role(r: FO.Role, e: M.Entry, st: M.State, sel: String) -> List<&2, D.Node>:
   match r:
     case FO.RShow{}:
-      ns
+      View.entry(e, st, sel)
     case FO.RHead{+id, +label, +open}:
-      View.fold.row(id, label, open) <> View.fold.shown(open, ns)
+      View.fold.row(id, label, open) <> View.fold.shown(open, e, st, sel)
     case FO.RIn{open}:
-      View.fold.shown(open, ns)
+      View.fold.shown(open, e, st, sel)
     case FO.RWork{+id, +label, open, inner}:
       match open:
         case True{}:
-          View.fold.row(id, label, True{}) <> View.role(inner, ns)
+          View.fold.row(id, label, True{}) <> View.role(inner, e, st, sel)
         case False{}:
           [View.fold.row(id, label, False{})]
 
@@ -871,7 +872,7 @@ def View.entries.r(es: List<&2, M.Entry>, rs: List<&2, FO.Role>, +st: M.State, +
     case Nil{} _:
       Nil{}
     case e <> t r <> rt:
-      List.append(&2, D.Node, View.role(r, View.entry(e, st, sel)), View.entries.r(t, rt, st, sel))
+      List.append(&2, D.Node, View.role(r, e, st, sel), View.entries.r(t, rt, st, sel))
     case e <> t Nil{}:
       List.append(&2, D.Node, View.entry(e, st, sel), View.entries.r(t, Nil{}, st, sel))
 
@@ -1306,7 +1307,7 @@ def View.hist.tick(+id: String, +i: Nat, +n: Nat, +cur: Bool) -> D.Node:
   D.El{"button", "", [D.At{"class", Bool.pick(String, cur, "tick on", "tick")}, D.At{"title", Bool.pick(String, String.is_empty(id), "The live file", "Step " ++ Nat.show(1n+i))},
     D.At{"style", "left:calc(100% * " ++ Nat.show(i) ++ " / " ++ Nat.show(Bool.pick(Nat, Nat.is_eq(n, 0n), 1n, n)) ++ ")"}, D.At{"data-value", id}, D.On{"click", "hist-go"}], Nil{}}
 
-def View.hist.ticks(ss: List<&2, HS.Step>, +i: Nat, +n: Nat, +at: Nat) -> List<&2, D.Node>:
+def View.hist.ticks(ss: List<&2, M.DesignRecord>, +i: Nat, +n: Nat, +at: Nat) -> List<&2, D.Node>:
   match ss:
     case Nil{}:
       [View.hist.tick("", i, n, Nat.is_eq(at, 0n))]
